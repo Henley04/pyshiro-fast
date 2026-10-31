@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Installation · pyshiro-fast</title>
+<meta name="description" content="Fast HSMM forced alignment for Japanese singing voice. A drop-in pyshiro fork, 100-700x faster on long audio, identical output.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header">
+  <div class="wrap">
+    <a class="site-name" href="index.html">pyshiro-fast</a>
+    <nav>
+      <a href="installation.html" aria-current="page">Install</a>
+      <a href="quickstart.html">Quick start</a>
+      <a href="cli.html">CLI</a>
+      <a href="api.html">API</a>
+      <a href="performance.html">Performance</a>
+      <a href="migration.html">Migration</a>
+      <a href="training.html">Training</a>
+      <a href="models.html">Models</a>
+      <a href="development.html">Development</a>
+      <a href="faq.html">FAQ</a>
+    </nav>
+  </div>
+</header>
+<main class="wrap">
+<h1>Installation</h1>
+<h2>Requirements</h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Python</td>
+<td>3.10, 3.11, 3.12, 3.13</td>
+</tr>
+<tr>
+<td>OS</td>
+<td>Linux, macOS, Windows (any platform numba supports)</td>
+</tr>
+<tr>
+<td>Hardware</td>
+<td>CPU only; no GPU required</td>
+</tr>
+<tr>
+<td>Audio</td>
+<td>16 kHz mono WAV (other sample rates are read by <code>soundfile</code> and must be resampled beforehand)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Runtime dependencies are installed automatically: <code>numpy</code>, <code>scipy</code>, <code>soundfile</code>,
+<code>numba</code>, <code>msgpack</code>.</p>
+<h2>From PyPI</h2>
+<pre><code class="language-bash">pip install pyshiro-fast
+</code></pre>
+<p>Check that it imports:</p>
+<pre><code class="language-bash">python -c &quot;import pyshiro; print(pyshiro.__version__)&quot;
+</code></pre>
+<p>The wheel includes both pre-trained models (~650 KB) and the kana-to-phoneme table,
+so no extra download is needed.</p>
+<h2>From source</h2>
+<pre><code class="language-bash">git clone https://github.com/henley04/pyshiro-fast
+cd pyshiro-fast
+pip install -e .
+</code></pre>
+<p>For development (tests, build tooling):</p>
+<pre><code class="language-bash">pip install -e &quot;.[dev]&quot;
+pytest
+</code></pre>
+<h2>Verifying the install</h2>
+<pre><code class="language-python">import pyshiro
+
+model, phonemap = pyshiro.load_bundled_model()
+print(model.nstate, len(phonemap))     # 123 49
+print(pyshiro.bundled_model_path())    # absolute paths inside site-packages
+</code></pre>
+<p>Running an alignment for the first time triggers numba JIT compilation and takes
+10–20 s longer than subsequent runs. The compiled kernels are cached in
+<code>__pycache__</code> next to the source, so the cost is paid once per environment.</p>
+<h2>Import name</h2>
+<p>The distribution is <code>pyshiro-fast</code>; the import name is <code>pyshiro</code>:</p>
+<pre><code class="language-python">import pyshiro          # recommended
+import pyshiro_fast     # alias, same objects
+</code></pre>
+<p>If you have the upstream <code>pyshiro</code> installed from source in the same environment,
+uninstall it first — both provide the <code>pyshiro</code> module.</p>
+<pre><code class="language-bash">pip uninstall pyshiro
+pip install pyshiro-fast
+</code></pre>
+<h2>Platform notes</h2>
+<p><strong>Apple Silicon / arm64.</strong> numba and <code>llvmlite</code> need a recent version; <code>pip install -U
+numba</code> resolves the correct wheel. If you see <code>ImportError: cannot import name
+'types' from 'llvmlite'</code>, your <code>llvmlite</code> and <code>numba</code> versions are mismatched —
+reinstall both together.</p>
+<p><strong>Windows.</strong> <code>soundfile</code> bundles libsndfile in its wheels; no separate install is
+needed. Long paths can break numba's cache; set <code>NUMBA_CACHE_DIR</code> to a short path if
+compilation fails with a path-length error.</p>
+<p><strong>Containers.</strong> The JIT cache is written next to the package. On read-only images, set
+<code>NUMBA_CACHE_DIR=/tmp/numba</code> to avoid a permission error on first run.</p>
+<h2>Troubleshooting</h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Symptom</th>
+<th>Cause</th>
+<th>Fix</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ModuleNotFoundError: pyshiro</code></td>
+<td>installed under a different interpreter</td>
+<td>use the same <code>python -m pip</code> you run your script with</td>
+</tr>
+<tr>
+<td><code>alignment failed: no valid path found</code></td>
+<td>lyrics longer than the audio, or wrong phonemap</td>
+<td>check the phoneme count against <code>T</code>; see <a href="faq.html">FAQ</a></td>
+</tr>
+<tr>
+<td>very slow first call</td>
+<td>numba JIT compilation</td>
+<td>expected once per environment</td>
+</tr>
+<tr>
+<td><code>ValueError: skip edge spans … states</code></td>
+<td>phonemap has a <code>pskip</code> edge longer than 7 states</td>
+<td>not supported by the packed backpointer; use the upstream kernel for that model</td>
+</tr>
+<tr>
+<td>garbage boundaries</td>
+<td>audio is not 16 kHz or not mono</td>
+<td>resample to 16 kHz mono first</td>
+</tr>
+</tbody>
+</table></div>
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <p>pyshiro-fast · GPL-3.0 · <a href="https://github.com/henley04/pyshiro-fast">source</a> ·
+       <a href="https://pypi.org/project/pyshiro-fast/">PyPI</a></p>
+    <p class="muted">Fork of pyshiro by wavtechyukky. Bundled models belong to their
+       original authors.</p>
+  </div>
+</footer>
+</body>
+</html>

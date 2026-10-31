@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pyshiro-fast</title>
+<meta name="description" content="Fast HSMM forced alignment for Japanese singing voice. A drop-in pyshiro fork, 100-700x faster on long audio, identical output.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header">
+  <div class="wrap">
+    <a class="site-name" href="index.html">pyshiro-fast</a>
+    <nav>
+      <a href="installation.html">Install</a>
+      <a href="quickstart.html">Quick start</a>
+      <a href="cli.html">CLI</a>
+      <a href="api.html">API</a>
+      <a href="performance.html">Performance</a>
+      <a href="migration.html">Migration</a>
+      <a href="training.html">Training</a>
+      <a href="models.html">Models</a>
+      <a href="development.html">Development</a>
+      <a href="faq.html">FAQ</a>
+    </nav>
+  </div>
+</header>
+<main class="wrap">
+<h1>pyshiro-fast</h1>
+<p>Fast HSMM forced alignment for Japanese singing voice. A drop-in fork of
+<a href="https://github.com/wavtechyukky/pyshiro">pyshiro</a> that aligns long recordings
+100–700× faster, without changing the result.</p>
+<pre><code class="language-bash">pip install pyshiro-fast
+</code></pre>
+<pre><code class="language-python">import pyshiro
+
+model, phonemap = pyshiro.load_bundled_model()
+streams  = pyshiro.extract_mfcc_from_file(&quot;song.wav&quot;)
+phonemes = pyshiro.convert_lyric_file(&quot;song.txt&quot;)
+
+T = streams[0].shape[0]
+state_seq = pyshiro.build_state_sequence(phonemes, phonemap, T)
+segments, loglik = pyshiro.forced_align_2pass(
+    model, streams, state_seq, nodur_phonemes={&quot;pau&quot;, &quot;br&quot;})
+
+intervals = pyshiro.segments_to_phoneme_intervals(phonemes, segments)
+pyshiro.write_lab(intervals, &quot;song.lab&quot;)
+</code></pre>
+<h2>What it does</h2>
+<p>Given a 16 kHz mono WAV and a lyrics file, <code>pyshiro-fast</code> returns the start and end
+frame of every phoneme. It uses the same two-pass scheme as the original SHIRO
+toolkit: a duration-free HMM pass for a rough path, then an HSMM pass with explicit
+duration distributions for the final boundaries. Typical uses are annotation for
+singing-voice databases, label conversion, and preparing training data for
+NNSVS / ENUNU-style singing synthesizers.</p>
+<h2>Performance</h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th style="text-align: right;">Audio length</th>
+<th style="text-align: right;">Upstream</th>
+<th style="text-align: right;">pyshiro-fast</th>
+<th style="text-align: right;">Speedup</th>
+<th style="text-align: right;">Peak RSS</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;">20 s</td>
+<td style="text-align: right;">11.09 s</td>
+<td style="text-align: right;">0.65 s</td>
+<td style="text-align: right;">17×</td>
+<td style="text-align: right;">737 / 192 MB</td>
+</tr>
+<tr>
+<td style="text-align: right;">60 s</td>
+<td style="text-align: right;">251.4 s</td>
+<td style="text-align: right;">2.50 s</td>
+<td style="text-align: right;">101×</td>
+<td style="text-align: right;">737 / 324 MB</td>
+</tr>
+<tr>
+<td style="text-align: right;">120 s</td>
+<td style="text-align: right;">1 986.5 s</td>
+<td style="text-align: right;">6.79 s</td>
+<td style="text-align: right;">293×</td>
+<td style="text-align: right;">2 401 / 742 MB</td>
+</tr>
+<tr>
+<td style="text-align: right;">300 s</td>
+<td style="text-align: right;">≈ 8.7 h †</td>
+<td style="text-align: right;">91.7 s</td>
+<td style="text-align: right;">≈ 341×</td>
+<td style="text-align: right;">≥ 14 GB / 255 MB</td>
+</tr>
+<tr>
+<td style="text-align: right;">600 s</td>
+<td style="text-align: right;">≈ 69 h †</td>
+<td style="text-align: right;">340.2 s</td>
+<td style="text-align: right;">≈ 730×</td>
+<td style="text-align: right;">≥ 57 GB / 332 MB</td>
+</tr>
+</tbody>
+</table></div>
+<p>† extrapolated from three measured points; upstream is cubic in audio length.
+Peak RSS is shown as upstream / pyshiro-fast. Details and measurement method:
+<a href="performance.html">Performance</a>.</p>
+<p>The speedup comes from four changes to the decoder, all in <code>pyshiro/align.py</code>:</p>
+<ul>
+<li>exact pruning of the duration axis against the predecessor's reachable window</li>
+<li><code>O(1)</code> sliding-window argmax in the duration-free pass (<code>O(N·T²) → O(N·T)</code>)</li>
+<li>backpointers packed into one <code>int32</code> per cell, scores kept in a <code>K</code>-row ring buffer</li>
+<li>Hirschberg divide-and-conquer traceback above a configurable memory threshold</li>
+</ul>
+<p>None of them changes arithmetic order, so segments and log-likelihood are identical to
+upstream — verified on 13 configurations against the original kernel, which is kept in
+the source as <code>_viterbi_dp</code>.</p>
+<h2>Start here</h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>If you want to…</th>
+<th>Read</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>install the package</td>
+<td><a href="installation.html">Installation</a></td>
+</tr>
+<tr>
+<td>align a song in five minutes</td>
+<td><a href="quickstart.html">Quick start</a></td>
+</tr>
+<tr>
+<td>use the command line</td>
+<td><a href="cli.html">CLI reference</a></td>
+</tr>
+<tr>
+<td>call the library from Python</td>
+<td><a href="api.html">Python API</a></td>
+</tr>
+<tr>
+<td>understand the speedup or tune memory</td>
+<td><a href="performance.html">Performance</a></td>
+</tr>
+<tr>
+<td>replace an existing pyshiro install</td>
+<td><a href="migration.html">Migrating from pyshiro</a></td>
+</tr>
+<tr>
+<td>train your own model</td>
+<td><a href="training.html">Training</a></td>
+</tr>
+<tr>
+<td>fix a broken alignment</td>
+<td><a href="faq.html">FAQ</a></td>
+</tr>
+</tbody>
+</table></div>
+<h2>Bundled models</h2>
+<p>Two Japanese models ship inside the wheel, so a fresh install can align immediately.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>jp-v2</code> (default)</td>
+<td>4-mixture GMMs; mean boundary error 2.05 frames on held-out singers</td>
+</tr>
+<tr>
+<td><code>jp-v1</code></td>
+<td>19.4 h multi-database model; more stable on <code>br</code> (breath)</td>
+</tr>
+</tbody>
+</table></div>
+<pre><code class="language-python">model, phonemap = pyshiro.load_bundled_model(&quot;jp-v1&quot;)
+</code></pre>
+<p>Credits and training data: <a href="models.html">Models</a>.</p>
+<h2>Requirements</h2>
+<p>Python 3.10–3.13, <code>numpy</code>, <code>scipy</code>, <code>soundfile</code>, <code>numba</code>, <code>msgpack</code>. No GPU.
+Linux, macOS and Windows are supported wherever numba runs.</p>
+<h2>License</h2>
+<p>GPL-3.0-only, inherited from upstream pyshiro and SHIRO. See <code>LICENSE</code> and <code>NOTICE</code>
+in the repository.</p>
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <p>pyshiro-fast · GPL-3.0 · <a href="https://github.com/henley04/pyshiro-fast">source</a> ·
+       <a href="https://pypi.org/project/pyshiro-fast/">PyPI</a></p>
+    <p class="muted">Fork of pyshiro by wavtechyukky. Bundled models belong to their
+       original authors.</p>
+  </div>
+</footer>
+</body>
+</html>

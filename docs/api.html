@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Python API · pyshiro-fast</title>
+<meta name="description" content="Fast HSMM forced alignment for Japanese singing voice. A drop-in pyshiro fork, 100-700x faster on long audio, identical output.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header">
+  <div class="wrap">
+    <a class="site-name" href="index.html">pyshiro-fast</a>
+    <nav>
+      <a href="installation.html">Install</a>
+      <a href="quickstart.html">Quick start</a>
+      <a href="cli.html">CLI</a>
+      <a href="api.html" aria-current="page">API</a>
+      <a href="performance.html">Performance</a>
+      <a href="migration.html">Migration</a>
+      <a href="training.html">Training</a>
+      <a href="models.html">Models</a>
+      <a href="development.html">Development</a>
+      <a href="faq.html">FAQ</a>
+    </nav>
+  </div>
+</header>
+<main class="wrap">
+<h1>Python API</h1>
+<p>Everything below is available from the top-level package:</p>
+<pre><code class="language-python">import pyshiro
+</code></pre>
+<p>Frame rate is 200 fps (5 ms per frame); <code>pyshiro.align.FPS == 200</code>.</p>
+<hr>
+<h2>Models</h2>
+<h3><code>load_hsmm(path) -&gt; HSMMModel</code></h3>
+<p>Reads a MessagePack <code>.hsmm</code> file.</p>
+<pre><code class="language-python">model = pyshiro.load_hsmm(&quot;my_model.hsmm&quot;)
+model.nstate      # number of GMMs
+model.nstream     # 3 (MFCC, Δ, ΔΔ)
+model.ndim        # 12 coefficients per stream
+model.nduration   # number of duration distributions
+model.streams     # list[Stream], each with .gmms
+model.durations   # list[Duration], each with .mean, .var, .floor, .ceil
+</code></pre>
+<h3><code>save_hsmm(model, path)</code></h3>
+<p>Writes a model in the same format; round-trips are lossless.</p>
+<h3><code>load_bundled_model(name="jp-v2") -&gt; (HSMMModel, dict)</code></h3>
+<p>Loads a model that ships with the package and its phonemap. <code>name</code> is <code>"jp-v2"</code>
+(default) or <code>"jp-v1"</code>.</p>
+<pre><code class="language-python">model, phonemap = pyshiro.load_bundled_model(&quot;jp-v1&quot;)
+</code></pre>
+<h3><code>bundled_model_path(name="jp-v2") -&gt; (Path, Path)</code></h3>
+<p>Returns <code>(hsmm_path, phonemap_path)</code> without loading. Useful for passing paths to the
+CLI or to <code>pyshiro-train</code>.</p>
+<pre><code class="language-python">hsmm, pm = pyshiro.bundled_model_path()
+</code></pre>
+<h3><code>pyshiro.BUNDLED_MODELS</code></h3>
+<p>Tuple of valid names: <code>("jp-v2", "jp-v1")</code>.</p>
+<hr>
+<h2>Features</h2>
+<h3><code>extract_mfcc(audio, sr=16000) -&gt; list[np.ndarray]</code></h3>
+<p>Takes a mono <code>float</code> array in <code>[-1, 1]</code>, returns three <code>(T, 12)</code> arrays: MFCC, Δ, ΔΔ.
+The front end matches SHIRO/ciglet, so models trained with the original toolkit work
+unchanged.</p>
+<pre><code class="language-python">import soundfile as sf
+audio, sr = sf.read(&quot;song.wav&quot;)          # must be 16 kHz mono
+streams = pyshiro.extract_mfcc(audio, sr)
+</code></pre>
+<h3><code>extract_mfcc_from_file(wav_path) -&gt; list[np.ndarray]</code></h3>
+<p>Reads the WAV with <code>soundfile</code> and calls <code>extract_mfcc</code>. No resampling: a 44.1 kHz file
+produces features at the wrong rate and meaningless boundaries.</p>
+<hr>
+<h2>Phonemes</h2>
+<h3><code>load_table(table_path=None) -&gt; dict</code></h3>
+<p>Loads the kana-to-phoneme table. With no argument, uses the table bundled with the
+package.</p>
+<h3><code>text_to_phonemes(text, table) -&gt; list[str]</code></h3>
+<p>Converts one string of hiragana (with optional inline tokens such as <code>br</code>) to a phoneme
+list. Unknown characters are skipped with a warning.</p>
+<h3><code>convert_lyric_file(txt_path, table=None) -&gt; list[str]</code></h3>
+<p>Reads a lyrics file and returns the full phoneme sequence, inserting <code>pau</code> at every line
+break. If the file already contains ASCII phonemes, it is parsed as a phoneme sequence
+instead of being converted.</p>
+<pre><code class="language-python">phonemes = pyshiro.convert_lyric_file(&quot;song.txt&quot;)
+</code></pre>
+<hr>
+<h2>Alignment</h2>
+<h3><code>build_state_sequence(phonemes, phonemap, T) -&gt; list[StateInfo]</code></h3>
+<p>Expands the phoneme list into three states per phoneme, using the phonemap for topology
+and duration indices. <code>T</code> is the number of frames; it is used to validate that the
+sequence can fit the audio.</p>
+<pre><code class="language-python">T = streams[0].shape[0]
+state_seq = pyshiro.build_state_sequence(phonemes, phonemap, T)
+</code></pre>
+<p>Each <code>StateInfo</code> has <code>phoneme</code>, <code>state_idx</code> (0/1/2), <code>dur_idx</code>, <code>out_idx</code>.</p>
+<h3><code>forced_align(...) -&gt; (segments, loglik)</code></h3>
+<p>Single Viterbi pass.</p>
+<pre><code class="language-python">segments, loglik = pyshiro.forced_align(
+    model, streams, state_seq,
+    use_duration=True,          # False = HMM mode, no duration prior
+    initial_segments=None,      # optional [(start, end)] per state, from a first pass
+    window=60,                  # search width around initial_segments, in frames
+    daem_temp=1.0,              # scale observation log-likelihood (training only)
+    nodur_phonemes=None,        # e.g. {&quot;pau&quot;, &quot;br&quot;} to ignore their duration models
+    hmm_cap=None,               # max frames per state in HMM mode
+    backtrace_mem_mb=1024,      # switch to divide-and-conquer above this size
+)
+</code></pre>
+<p>Returns <code>segments</code> — one <code>(start, end)</code> per <strong>state</strong>, <code>end</code> exclusive — and <code>loglik</code>,
+the total log-likelihood in nats. Divide by <code>T</code> to compare across files.</p>
+<p><code>backtrace_mem_mb=0</code> forces the divide-and-conquer traceback (slower, minimal memory);
+a large value forces the full matrix (faster, <code>O(N·T)</code> memory). Both produce the same
+output.</p>
+<h3><code>forced_align_2pass(...) -&gt; (segments, loglik)</code></h3>
+<p>The pipeline used by the CLI: HMM pass to get a rough path, HSMM pass restricted to
+<code>±window</code> frames around it. Same keyword arguments, plus <code>window</code>.</p>
+<pre><code class="language-python">segments, loglik = pyshiro.forced_align_2pass(
+    model, streams, state_seq, window=60, nodur_phonemes={&quot;pau&quot;, &quot;br&quot;})
+</code></pre>
+<p>Prefer this over a single HSMM pass: it is both faster and more robust.</p>
+<h3><code>refine_pau_boundaries(intervals, audio, sr, ...) -&gt; intervals</code></h3>
+<p>Post-processes <code>pau</code> → soft-onset consonant boundaries (nasals, approximants,
+fricatives) with short-time RMS onset detection. HSMM alignment tends to place those
+boundaries slightly inside the silence; this moves them to the energy rise.
+Input and output are in <strong>frames</strong> (<code>segments_to_phoneme_intervals</code> output).</p>
+<pre><code class="language-python">intervals = pyshiro.segments_to_phoneme_intervals(phonemes, segments)
+intervals = pyshiro.refine_pau_boundaries(intervals, audio, sr)
+</code></pre>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Argument</th>
+<th>Default</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>soft_onset_phones</code></td>
+<td><code>SOFT_ONSET_PHONES</code></td>
+<td>phonemes to adjust</td>
+</tr>
+<tr>
+<td><code>search_sec</code></td>
+<td><code>0.05</code></td>
+<td>search radius around the boundary</td>
+</tr>
+<tr>
+<td><code>rms_hop_sec</code></td>
+<td><code>0.0025</code></td>
+<td>RMS frame hop</td>
+</tr>
+<tr>
+<td><code>threshold_ratio</code></td>
+<td><code>0.15</code></td>
+<td>fraction of consonant peak RMS</td>
+</tr>
+<tr>
+<td><code>min_pau_frames</code></td>
+<td><code>2</code></td>
+<td>skip shorter pauses</td>
+</tr>
+</tbody>
+</table></div>
+<h3><code>realign_external_labels(...) -&gt; intervals</code></h3>
+<p>Converts labels produced by another tool into this model's conventions. Long vowels and
+pauses are used as anchors; each segment between anchors is re-aligned with the HSMM.</p>
+<pre><code class="language-python">intervals = pyshiro.realign_external_labels(
+    model, streams, external_intervals, phonemap,
+    anchor_vowel_min_sec=0.5,
+    anchor_pau_min_sec=0.5,
+    max_seg_sec=30.0,
+    ignore_transitions=None,      # set of (left, right) phoneme pairs to leave alone
+    phoneme_map=None,             # rename symbols before aligning
+    unknown_phoneme_map=None,     # fallback for symbols absent from the phonemap
+)
+</code></pre>
+<p><code>intervals</code> must be in <strong>seconds</strong> (as returned by <code>read_lab</code>, <code>read_textgrid</code> or
+<code>read_audacity</code>). The return value is in <strong>frames</strong>, ready for <code>write_lab</code> and the other
+writers.</p>
+<h3><code>pyshiro.SILENCE_PHONES</code></h3>
+<p><code>frozenset({"pau", "sil", "cl", "br"})</code> — phonemes treated as silence by the alignment
+helpers.</p>
+<hr>
+<h2>Labels</h2>
+<p>All writers accept frame indices (int) or seconds (float) and detect which they got.</p>
+<h3><code>segments_to_phoneme_intervals(phonemes, segments) -&gt; list[(start, end, phoneme)]</code></h3>
+<p>Collapses the per-state segments (3 per phoneme) into per-phoneme intervals, in frames.</p>
+<pre><code class="language-python">intervals = pyshiro.segments_to_phoneme_intervals(phonemes, segments)
+</code></pre>
+<h3>Writers</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Output</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>write_lab(intervals, path)</code></td>
+<td>HTK <code>.lab</code>, 100 ns integers</td>
+</tr>
+<tr>
+<td><code>write_lab_sec(intervals, path)</code></td>
+<td><code>.lab</code>, space-separated seconds</td>
+</tr>
+<tr>
+<td><code>write_textgrid(intervals, path, tier_name="phoneme")</code></td>
+<td>Praat TextGrid</td>
+</tr>
+<tr>
+<td><code>write_audacity(intervals, path)</code></td>
+<td>tab-separated seconds</td>
+</tr>
+</tbody>
+</table></div>
+<h3>Readers</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Returns</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>read_lab(path)</code></td>
+<td><code>[(start_sec, end_sec, label)]</code>, auto-detects HTK vs seconds</td>
+</tr>
+<tr>
+<td><code>read_textgrid(path, tier_name=None)</code></td>
+<td><code>[(start_sec, end_sec, label)]</code></td>
+</tr>
+<tr>
+<td><code>read_audacity(path)</code></td>
+<td><code>[(start_sec, end_sec, label)]</code></td>
+</tr>
+</tbody>
+</table></div>
+<pre><code class="language-python">intervals = pyshiro.read_lab(&quot;song.lab&quot;)        # seconds
+</code></pre>
+<hr>
+<h2>End-to-end example with a post-processed boundary</h2>
+<pre><code class="language-python">import soundfile as sf
+import pyshiro
+
+model, phonemap = pyshiro.load_bundled_model()
+audio, sr = sf.read(&quot;song.wav&quot;)
+streams = pyshiro.extract_mfcc(audio, sr)
+
+phonemes = pyshiro.convert_lyric_file(&quot;song.txt&quot;)
+state_seq = pyshiro.build_state_sequence(phonemes, phonemap, streams[0].shape[0])
+
+segments, loglik = pyshiro.forced_align_2pass(
+    model, streams, state_seq, nodur_phonemes={&quot;pau&quot;, &quot;br&quot;})
+
+intervals = pyshiro.segments_to_phoneme_intervals(phonemes, segments)
+intervals = pyshiro.refine_pau_boundaries(intervals, audio, sr)
+pyshiro.write_lab(intervals, &quot;song.lab&quot;)
+print(f&quot;{loglik / streams[0].shape[0]:.3f} nats/frame&quot;)
+</code></pre>
+<h2>Errors</h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Exception</th>
+<th>When</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>RuntimeError("alignment failed: no valid path found…")</code></td>
+<td>no state path fits the audio; lyrics too long or phonemap mismatch</td>
+</tr>
+<tr>
+<td><code>ValueError("skip edge spans …")</code></td>
+<td>a <code>pskip</code> edge longer than 7 states; unsupported by the packed backpointer</td>
+</tr>
+<tr>
+<td><code>FileNotFoundError</code> from <code>bundled_model_path</code></td>
+<td>package data missing (source checkout without models)</td>
+</tr>
+</tbody>
+</table></div>
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <p>pyshiro-fast · GPL-3.0 · <a href="https://github.com/henley04/pyshiro-fast">source</a> ·
+       <a href="https://pypi.org/project/pyshiro-fast/">PyPI</a></p>
+    <p class="muted">Fork of pyshiro by wavtechyukky. Bundled models belong to their
+       original authors.</p>
+  </div>
+</footer>
+</body>
+</html>

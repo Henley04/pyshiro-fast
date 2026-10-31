@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CLI reference · pyshiro-fast</title>
+<meta name="description" content="Fast HSMM forced alignment for Japanese singing voice. A drop-in pyshiro fork, 100-700x faster on long audio, identical output.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header">
+  <div class="wrap">
+    <a class="site-name" href="index.html">pyshiro-fast</a>
+    <nav>
+      <a href="installation.html">Install</a>
+      <a href="quickstart.html">Quick start</a>
+      <a href="cli.html" aria-current="page">CLI</a>
+      <a href="api.html">API</a>
+      <a href="performance.html">Performance</a>
+      <a href="migration.html">Migration</a>
+      <a href="training.html">Training</a>
+      <a href="models.html">Models</a>
+      <a href="development.html">Development</a>
+      <a href="faq.html">FAQ</a>
+    </nav>
+  </div>
+</header>
+<main class="wrap">
+<h1>CLI reference</h1>
+<p>Three entry points are installed or available via <code>python -m</code>:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Module</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>pyshiro-align</code></td>
+<td><code>pyshiro.align</code></td>
+<td>align one WAV + lyrics pair</td>
+</tr>
+<tr>
+<td><code>pyshiro-train</code></td>
+<td><code>pyshiro.train</code></td>
+<td>train an <code>.hsmm</code> model from a corpus</td>
+</tr>
+<tr>
+<td><code>python -m pyshiro.untie</code></td>
+<td><code>pyshiro.untie</code></td>
+<td>expand a monophone model to triphones</td>
+</tr>
+</tbody>
+</table></div>
+<hr>
+<h2><code>pyshiro-align</code></h2>
+<pre><code>pyshiro-align WAV LYRICS [--model PATH] [--phonemap PATH] [--out PATH]
+                        [--format {lab,textgrid,audacity}]
+</code></pre>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Argument</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>WAV</code></td>
+<td>yes</td>
+<td>16 kHz mono WAV</td>
+</tr>
+<tr>
+<td><code>LYRICS</code></td>
+<td>yes</td>
+<td>UTF-8 lyrics, hiragana, one phrase per line</td>
+</tr>
+<tr>
+<td><code>--model</code></td>
+<td>no</td>
+<td><code>.hsmm</code> file; default: bundled <code>jp-v2</code></td>
+</tr>
+<tr>
+<td><code>--phonemap</code></td>
+<td>no</td>
+<td><code>phonemap.json</code>; default: bundled <code>jp-v2</code></td>
+</tr>
+<tr>
+<td><code>--out</code></td>
+<td>no</td>
+<td>output path; default: the WAV name with the format's extension</td>
+</tr>
+<tr>
+<td><code>--format</code></td>
+<td>no</td>
+<td><code>lab</code> (default), <code>textgrid</code>, <code>audacity</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>Examples:</p>
+<pre><code class="language-bash"># bundled model, song.lab
+pyshiro-align song.wav song.txt
+
+# custom model, Praat TextGrid
+pyshiro-align song.wav song.txt \
+    --model my.hsmm --phonemap my_phonemap.json \
+    --format textgrid --out song.TextGrid
+
+# batch: every WAV in a folder that has a matching .txt
+for w in wav/*.wav; do
+  t=&quot;${w%.wav}.txt&quot;
+  [ -f &quot;$t&quot; ] &amp;&amp; pyshiro-align &quot;$w&quot; &quot;$t&quot;
+done
+</code></pre>
+<p>The CLI always runs the two-pass pipeline with <code>nodur_phonemes={"pau","br"}</code>. For other
+settings, call the Python API directly.</p>
+<p><strong>Output formats.</strong> <code>lab</code> is HTK 100 ns integers (ENUNU / NNSVS / vLabeler compatible);
+<code>textgrid</code> is a Praat TextGrid with one <code>phoneme</code> tier; <code>audacity</code> is tab-separated
+seconds, one label per line.</p>
+<p><strong>Exit status.</strong> <code>0</code> on success. A <code>RuntimeError</code> (<code>alignment failed: no valid path
+found</code>) means no state path covers the audio — usually lyrics longer than the audio.</p>
+<hr>
+<h2><code>pyshiro-train</code></h2>
+<pre><code>pyshiro-train --wav_dir DIR --lab_dir DIR [options]
+</code></pre>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--wav_dir</code></td>
+<td>required</td>
+<td>directory of 16 kHz mono WAVs</td>
+</tr>
+<tr>
+<td><code>--lab_dir</code></td>
+<td>required</td>
+<td>directory of initial <code>.lab</code> files (same stems)</td>
+</tr>
+<tr>
+<td><code>--phonemap</code></td>
+<td><code>SHIRO-Models-Japanese/intunist-jp6_phonemap.json</code></td>
+<td>phoneme set definition</td>
+</tr>
+<tr>
+<td><code>--out</code></td>
+<td><code>my_model.hsmm</code></td>
+<td>output model</td>
+</tr>
+<tr>
+<td><code>--iters</code></td>
+<td><code>5</code></td>
+<td>total EM iterations</td>
+</tr>
+<tr>
+<td><code>--hmm_iters</code></td>
+<td><code>0</code></td>
+<td>duration-free bootstrap iterations (like <code>shiro-rest -g</code>)</td>
+</tr>
+<tr>
+<td><code>--daem</code></td>
+<td>off</td>
+<td>temperature-annealed training (like <code>shiro-rest -D</code>)</td>
+</tr>
+<tr>
+<td><code>--nmix</code></td>
+<td><code>1</code></td>
+<td>maximum GMM mixtures; splits happen during training</td>
+</tr>
+<tr>
+<td><code>--init_model</code></td>
+<td>none</td>
+<td>start from this model instead of flat start</td>
+</tr>
+<tr>
+<td><code>--start_iter</code></td>
+<td><code>0</code></td>
+<td>resume at this iteration (with <code>--init_model</code>)</td>
+</tr>
+<tr>
+<td><code>--jobs</code></td>
+<td>CPU count</td>
+<td>parallel feature-extraction workers</td>
+</tr>
+<tr>
+<td><code>--cap_relax_iter</code></td>
+<td>none</td>
+<td>from this iteration, relax <code>hmm_cap</code> from 200 to 1000</td>
+</tr>
+<tr>
+<td><code>--test_wav_dir</code></td>
+<td>none</td>
+<td>held-out WAVs for per-iteration test log-likelihood</td>
+</tr>
+<tr>
+<td><code>--test_lab_dir</code></td>
+<td>none</td>
+<td>held-out labels, used with <code>--test_wav_dir</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>Minimal run:</p>
+<pre><code class="language-bash">pyshiro-train --wav_dir corpus/wav --lab_dir corpus/lab \
+    --phonemap my_phonemap.json --out model.hsmm --iters 8
+</code></pre>
+<p>Recommended settings for a singing-voice corpus (the configuration used for the bundled
+<code>jp-v2</code> model):</p>
+<pre><code class="language-bash">pyshiro-train --wav_dir corpus/wav --lab_dir corpus/lab \
+    --phonemap my_phonemap.json --out model.hsmm \
+    --hmm_iters 4 --daem --nmix 4 --iters 16 --cap_relax_iter 6
+</code></pre>
+<p>Checkpoints <code>model.iter001.hsmm</code>, <code>model.iter002.hsmm</code>, … are written after every
+iteration, so training can be resumed:</p>
+<pre><code class="language-bash">pyshiro-train ... --init_model model.iter006.hsmm --start_iter 6 --iters 16
+</code></pre>
+<p>With <code>--nmix 4</code> the GMM split happens at roughly one third and two thirds of <code>--iters</code>,
+which is why <code>--iters 16</code> is suggested rather than 8. See <a href="training.html">Training</a>.</p>
+<hr>
+<h2><code>python -m pyshiro.untie</code></h2>
+<p>Expands a monophone model into context-dependent triphones, using the triphone contexts
+observed in a labelled corpus.</p>
+<pre><code class="language-bash">python -m pyshiro.untie \
+    --phonemap mono_phonemap.json --model mono.hsmm \
+    --lab_dir corpus/lab \
+    --out_phonemap tri_phonemap.json --out_model tri.hsmm \
+    --sil pau sil br
+</code></pre>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--phonemap</code></td>
+<td>input monophone phonemap</td>
+</tr>
+<tr>
+<td><code>--model</code></td>
+<td>input monophone <code>.hsmm</code></td>
+</tr>
+<tr>
+<td><code>--lab_dir</code></td>
+<td>corpus labels, used to collect contexts</td>
+</tr>
+<tr>
+<td><code>--out_phonemap</code></td>
+<td>output triphone phonemap</td>
+</tr>
+<tr>
+<td><code>--out_model</code></td>
+<td>output triphone model</td>
+</tr>
+<tr>
+<td><code>--sil</code></td>
+<td>phonemes treated as context boundaries (default <code>pau sil br</code>)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Triphone models are larger and slower to align with; use them only when monophone
+accuracy is insufficient.</p>
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <p>pyshiro-fast · GPL-3.0 · <a href="https://github.com/henley04/pyshiro-fast">source</a> ·
+       <a href="https://pypi.org/project/pyshiro-fast/">PyPI</a></p>
+    <p class="muted">Fork of pyshiro by wavtechyukky. Bundled models belong to their
+       original authors.</p>
+  </div>
+</footer>
+</body>
+</html>

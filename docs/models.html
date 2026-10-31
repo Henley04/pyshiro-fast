@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bundled models · pyshiro-fast</title>
+<meta name="description" content="Fast HSMM forced alignment for Japanese singing voice. A drop-in pyshiro fork, 100-700x faster on long audio, identical output.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header">
+  <div class="wrap">
+    <a class="site-name" href="index.html">pyshiro-fast</a>
+    <nav>
+      <a href="installation.html">Install</a>
+      <a href="quickstart.html">Quick start</a>
+      <a href="cli.html">CLI</a>
+      <a href="api.html">API</a>
+      <a href="performance.html">Performance</a>
+      <a href="migration.html">Migration</a>
+      <a href="training.html">Training</a>
+      <a href="models.html" aria-current="page">Models</a>
+      <a href="development.html">Development</a>
+      <a href="faq.html">FAQ</a>
+    </nav>
+  </div>
+</header>
+<main class="wrap">
+<h1>Bundled models</h1>
+<p>The wheel contains two Japanese singing-voice models plus their phonemaps, so a fresh
+install can align without downloading anything.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Name</th>
+<th>File</th>
+<th>Mixtures</th>
+<th style="text-align: right;">Size</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>jp-v2</code> (default)</td>
+<td><code>pyshiro-jp-v2.hsmm</code></td>
+<td>4</td>
+<td style="text-align: right;">487 KB</td>
+<td>better overall boundary accuracy</td>
+</tr>
+<tr>
+<td><code>jp-v1</code></td>
+<td><code>pyshiro-jp-v1.hsmm</code></td>
+<td>1</td>
+<td style="text-align: right;">127 KB</td>
+<td>more stable on <code>br</code> (breath)</td>
+</tr>
+</tbody>
+</table></div>
+<pre><code class="language-python">import pyshiro
+model, phonemap = pyshiro.load_bundled_model()          # jp-v2
+model, phonemap = pyshiro.load_bundled_model(&quot;jp-v1&quot;)   # breath-heavy material
+hsmm, pm = pyshiro.bundled_model_path(&quot;jp-v1&quot;)          # just the paths
+</code></pre>
+<h2>Accuracy</h2>
+<p>Measured on manually verified phoneme boundaries from singers that were not in the
+training set:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Model</th>
+<th style="text-align: right;">Mean boundary error</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>jp-v1</code></td>
+<td style="text-align: right;">3.27 frames (16 ms)</td>
+</tr>
+<tr>
+<td><code>jp-v2</code></td>
+<td style="text-align: right;">2.05 frames (10 ms)</td>
+</tr>
+</tbody>
+</table></div>
+<h3>Known weakness of <code>jp-v2</code>: breaths</h3>
+<p><code>jp-v2</code> under-estimates <code>br</code> regions. On 1 015 breath segments from one singing database,
+the mean difference from the reference labels was 8.4 frames for <code>jp-v1</code> and 16.4 frames
+for <code>jp-v2</code>; segments off by more than 200 ms were 13 for <code>jp-v1</code> and 133 for <code>jp-v2</code>.
+Adjusting the duration floor does not close the gap.</p>
+<p>For material with many breaths, either align with <code>jp-v1</code> or keep <code>br</code> out of the
+duration model:</p>
+<pre><code class="language-python">segments, loglik = pyshiro.forced_align_2pass(
+    model, streams, state_seq, nodur_phonemes={&quot;pau&quot;, &quot;br&quot;})
+</code></pre>
+<p>The CLI already does this.</p>
+<h2>Phoneme set</h2>
+<p>Both models use the same 49-entry Japanese phoneme set, including <code>pau</code> (pause), <code>br</code>
+(breath), <code>cl</code> (consonant length) and <code>N</code> (moraic nasal). The phonemap defines, per
+phoneme, its topology (<code>type-a</code> / <code>type-b</code> / <code>type-c</code> / <code>skip-boundary</code>), its duration
+distribution index, and whether it is skippable (<code>pskip</code>).</p>
+<h2>Kana-to-phoneme table</h2>
+<p><code>pyshiro/data/kana2phonemes.table</code> is derived from ENUNU's <code>kana2phonemes_etk_001.table</code>.</p>
+<h2>Licensing and credits</h2>
+<p>Both models were trained by wavtechyukky and are redistributed unmodified from the
+upstream repository under GPL-3.0.</p>
+<p><code>pyshiro-jp-v1.hsmm</code> was trained on the following singing-voice databases. Credit belongs
+to their creators and rights holders:</p>
+<ul>
+<li><strong>Onikuru Kuruumi Singing Voice Database</strong> — Onikuru Kuruumi
+  (<a href="https://onikuru.info">onikuru.info</a>)</li>
+<li><strong>Oftn-P Singing Voice Database</strong> — database by Oftn-P
+  (<a href="https://sites.google.com/view/oftn-utagoedb">sites.google.com/view/oftn-utagoedb</a>)</li>
+<li><strong>Namine Ritsu</strong> — Canon
+  (<a href="https://www.canon-voice.com">canon-voice.com</a>)</li>
+<li><strong>Tohoku Kiritan Singing Database</strong> — © SSS
+  (<a href="https://zunko.jp/kiridev/login.php">zunko.jp/kiridev</a>)</li>
+</ul>
+<p>If you plan to use these models commercially, review the terms of those databases first.
+The GPL covers the model files as distributed here; it cannot grant rights the original
+data providers did not grant.</p>
+<h2>Training your own model</h2>
+<p>See <a href="training.html">Training</a>. Any <code>.hsmm</code> produced there is compatible with the same
+API — pass it explicitly instead of using <code>load_bundled_model</code>.</p>
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <p>pyshiro-fast · GPL-3.0 · <a href="https://github.com/henley04/pyshiro-fast">source</a> ·
+       <a href="https://pypi.org/project/pyshiro-fast/">PyPI</a></p>
+    <p class="muted">Fork of pyshiro by wavtechyukky. Bundled models belong to their
+       original authors.</p>
+  </div>
+</footer>
+</body>
+</html>

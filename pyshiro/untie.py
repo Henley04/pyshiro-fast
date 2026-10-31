@@ -247,57 +247,57 @@ def untie(
     ----------
     phonemap_path : モノフォン phonemap.json
     model_path    : モノフォン .hsmm
-    lab_dir       : コーパス .lab ディレクトリ（トライフォン収集用）
-    out_phonemap  : 出力トライフォン phonemap.json
-    out_model     : 出力トライフォン .hsmm
-    sil_phones    : コンテキスト境界として使う無音音素（デフォルト: pau, sil, br）
+    lab_dir       : corpus .lab directory (used to collect triphone contexts)
+    out_phonemap  : output triphone phonemap.json
+    out_model     : output triphone .hsmm
+    sil_phones    : silence phonemes used as context boundaries (default: pau, sil, br)
     """
     phonemap_raw = json.loads(phonemap_path.read_text(encoding="utf-8"))
     mono_phonemap = phonemap_raw["phone_map"]
     mono_model    = load_hsmm(model_path)
 
-    print(f"モノフォン音素数: {len(mono_phonemap)}")
-    print(f"モデル GMM 数:  {mono_model.nstate}")
+    print(f"Monophone entries: {len(mono_phonemap)}")
+    print(f"Model GMMs:        {mono_model.nstate}")
 
-    print("トライフォンコンテキスト収集中...")
+    print("Collecting triphone contexts...")
     triphones = collect_triphones(lab_dir, sil_phones)
-    print(f"  ユニークトライフォン数: {len(triphones)}")
+    print(f"  unique triphones: {len(triphones)}")
 
-    print("phonemap 展開中...")
+    print("Expanding phonemap...")
     tri_phonemap, total_out = build_triphone_phonemap(mono_phonemap, triphones)
     n_tri = sum(1 for e in tri_phonemap.values() if e.get('triphone'))
-    print(f"  トライフォンエントリ数: {n_tri}")
-    print(f"  出力 GMM 総数: {total_out}")
+    print(f"  triphone entries: {n_tri}")
+    print(f"  output GMMs: {total_out}")
 
-    print("モデル展開中...")
+    print("Expanding model...")
     tri_model = expand_model(mono_model, mono_phonemap, tri_phonemap, total_out)
 
     # phonemap JSON 書き出し
     out_raw = {"phone_map": tri_phonemap}
     out_phonemap.write_text(json.dumps(out_raw, ensure_ascii=False, indent=2),
                             encoding="utf-8")
-    print(f"  phonemap 保存: {out_phonemap}")
+    print(f"  wrote phonemap: {out_phonemap}")
 
     # モデル保存
     save_hsmm(tri_model, out_model)
-    print(f"  model 保存: {out_model}")
-    print("完了")
+    print(f"  wrote model: {out_model}")
+    print("Done")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="モノフォン → トライフォン展開")
+    parser = argparse.ArgumentParser(description="Expand a monophone model to context-dependent triphones")
     parser.add_argument("--phonemap",     type=Path, required=True,
-                        help="モノフォン phonemap.json")
+                        help="monophone phonemap.json")
     parser.add_argument("--model",        type=Path, required=True,
-                        help="モノフォン .hsmm")
+                        help="monophone .hsmm")
     parser.add_argument("--lab_dir",      type=Path, required=True,
-                        help="コーパス .lab ディレクトリ")
+                        help="corpus .lab directory")
     parser.add_argument("--out_phonemap", type=Path, required=True,
-                        help="出力トライフォン phonemap.json")
+                        help="output triphone phonemap.json")
     parser.add_argument("--out_model",    type=Path, required=True,
-                        help="出力トライフォン .hsmm")
+                        help="output triphone .hsmm")
     parser.add_argument("--sil", nargs="*", default=["pau", "sil", "br"],
-                        help="コンテキスト境界音素（デフォルト: pau sil br）")
+                        help="context boundary phonemes (default: pau sil br)")
     args = parser.parse_args()
 
     untie(

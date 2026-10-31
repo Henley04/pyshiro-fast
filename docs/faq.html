@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FAQ · pyshiro-fast</title>
+<meta name="description" content="Fast HSMM forced alignment for Japanese singing voice. A drop-in pyshiro fork, 100-700x faster on long audio, identical output.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header">
+  <div class="wrap">
+    <a class="site-name" href="index.html">pyshiro-fast</a>
+    <nav>
+      <a href="installation.html">Install</a>
+      <a href="quickstart.html">Quick start</a>
+      <a href="cli.html">CLI</a>
+      <a href="api.html">API</a>
+      <a href="performance.html">Performance</a>
+      <a href="migration.html">Migration</a>
+      <a href="training.html">Training</a>
+      <a href="models.html">Models</a>
+      <a href="development.html">Development</a>
+      <a href="faq.html" aria-current="page">FAQ</a>
+    </nav>
+  </div>
+</header>
+<main class="wrap">
+<h1>FAQ</h1>
+<h2>Alignment</h2>
+<h3><code>RuntimeError: alignment failed: no valid path found</code></h3>
+<p>No state sequence covers the audio. Causes, in order of likelihood:</p>
+<ol>
+<li><strong>Lyrics longer than the audio.</strong> Every phoneme needs at least one frame and pauses
+   have floors too. Check <code>T</code> (frames) against the phoneme count: <code>pyshiro-align</code> prints
+   both. Rough guide: one mora ≈ 150–250 ms, so 200 phonemes need at least ~60 s.</li>
+<li><strong>Wrong phonemap.</strong> A phonemap that lacks one of your phonemes makes it impossible to
+   place.</li>
+<li><strong>Truncated or silent audio.</strong> A zero-length WAV, or one shorter than a few frames.</li>
+</ol>
+<h3>Boundaries are shifted by a constant offset</h3>
+<p>The audio is not 16 kHz, or not mono. <code>extract_mfcc</code> does not resample.</p>
+<pre><code class="language-bash">ffmpeg -i in.wav -ac 1 -ar 16000 out.wav
+</code></pre>
+<h3>One phoneme spans several seconds</h3>
+<p>Usually a line break is missing in the lyrics: each line becomes one <code>pau</code>, and long
+phrases let the model stretch a vowel. Split the phrase with line breaks.</p>
+<h3><code>pau</code> boundaries sit inside the consonant</h3>
+<p>Known HSMM behaviour for soft onsets (nasals, approximants, fricatives). Apply the
+onset-detection post-process:</p>
+<pre><code class="language-python">intervals = pyshiro.refine_pau_boundaries(intervals, audio, sr)
+</code></pre>
+<h3>Breath (<code>br</code>) regions are too short</h3>
+<p>The <code>jp-v2</code> model under-estimates <code>br</code>. Use <code>jp-v1</code> for material with many breaths:</p>
+<pre><code class="language-python">model, phonemap = pyshiro.load_bundled_model(&quot;jp-v1&quot;)
+</code></pre>
+<p>Or keep <code>br</code> out of the duration model when aligning: <code>nodur_phonemes={"pau","br"}</code>.</p>
+<h3>Results differ slightly from upstream</h3>
+<p>They should not — differences indicate a bug. Please open an issue with the input that
+reproduces it. On very large inputs, make sure both runs used the same
+<code>backtrace_mem_mb</code> budget only for timing; the output must not depend on it.</p>
+<h2>Performance</h2>
+<h3>The first run is slow</h3>
+<p>numba compiles the kernel on first use (10–20 s). Later runs reuse the cache in
+<code>__pycache__</code>. In containers with a read-only package directory, set
+<code>NUMBA_CACHE_DIR=/tmp/numba</code>.</p>
+<h3>Memory is higher than the table says</h3>
+<p>Peak RSS includes Python, numpy, the features (three <code>(T, 12)</code> arrays), and the
+backpointer matrix. Lower <code>backtrace_mem_mb</code> to force the divide-and-conquer path:</p>
+<pre><code class="language-python">pyshiro.forced_align_2pass(..., backtrace_mem_mb=256)
+</code></pre>
+<h3>Is it faster to use one pass?</h3>
+<p><code>forced_align(..., use_duration=True)</code> alone is not recommended: without a first-pass
+window, the duration scan covers the whole timeline and is much slower than the two-pass
+pipeline for the same accuracy.</p>
+<h2>Installation</h2>
+<h3><code>ModuleNotFoundError: pyshiro</code></h3>
+<p>You are running a different interpreter than the one you installed into:</p>
+<pre><code class="language-bash">python -m pip install pyshiro-fast
+python -m pyshiro.align --help
+</code></pre>
+<h3>Both <code>pyshiro</code> and <code>pyshiro-fast</code> are installed</h3>
+<p>Both provide the <code>pyshiro</code> module. Remove the upstream one:</p>
+<pre><code class="language-bash">pip uninstall pyshiro
+pip install --force-reinstall pyshiro-fast
+</code></pre>
+<h3><code>ImportError: cannot import name 'types' from 'llvmlite'</code></h3>
+<p><code>numba</code> and <code>llvmlite</code> versions do not match. Reinstall them together:</p>
+<pre><code class="language-bash">pip install --force-reinstall &quot;numba&gt;=0.60&quot;
+</code></pre>
+<h3><code>ValueError: skip edge spans N states (limit 7)</code></h3>
+<p>Your phonemap has a <code>pskip</code> edge spanning more than 7 states, which the packed
+backpointer cannot encode. Either shorten the skip in the phonemap or use upstream's
+kernel for that model.</p>
+<h2>Data and output</h2>
+<h3>What lyric format is accepted?</h3>
+<p>Hiragana, UTF-8, one phrase per line. Line breaks become <code>pau</code>. Inline <code>br</code> is allowed.
+Katakana is converted through the bundled table. ASCII phoneme sequences are passed
+through unchanged.</p>
+<h3>Why is my <code>.lab</code> in huge integers?</h3>
+<p>HTK format: 100 ns units. Frame <code>n</code> is <code>n × 5 000 000</code>. Use <code>write_lab_sec</code> for seconds.</p>
+<h3>Can I use a TextGrid made in Praat?</h3>
+<p>Yes — <code>pyshiro.read_textgrid</code>, then <code>realign_external_labels</code> to convert its conventions
+to this model's. See <a href="api.html#realign_external_labels">API</a>.</p>
+<h3>Does it work for speech, not singing?</h3>
+<p>The bundled models are trained on singing voice. The algorithm is generic, but for speech
+you need a model trained on speech with a matching phonemap.</p>
+<h2>Licensing</h2>
+<h3>Can I use this commercially?</h3>
+<p>The code is GPL-3.0. The bundled models are redistributed from upstream under the same
+license, but they were trained on third-party singing databases — check those terms
+before commercial use. See <a href="models.html">Models</a>.</p>
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <p>pyshiro-fast · GPL-3.0 · <a href="https://github.com/henley04/pyshiro-fast">source</a> ·
+       <a href="https://pypi.org/project/pyshiro-fast/">PyPI</a></p>
+    <p class="muted">Fork of pyshiro by wavtechyukky. Bundled models belong to their
+       original authors.</p>
+  </div>
+</footer>
+</body>
+</html>

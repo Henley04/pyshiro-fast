@@ -439,7 +439,7 @@ def save_hsmm(model: HSMMModel, path: Path) -> None:
         [_dur_to_obj(d)    for d in model.durations],
     ]
     path.write_bytes(msgpack.packb(obj))
-    print(f"  保存: {path}", flush=True)
+    print(f"  saved: {path}", flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -478,7 +478,7 @@ def collect_stats(
                           model, use_align, use_duration, daem_temp, hmm_cap))
 
     if n_no_lab:
-        print(f"  lab なしスキップ: {n_no_lab} 件", flush=True)
+        print(f"  skipped (no .lab): {n_no_lab}", flush=True)
 
     suff_stats: Dict = {}
     dur_pool:   Dict = defaultdict(list)
@@ -515,7 +515,7 @@ def collect_stats(
                 if show_tb:
                     print(traceback.format_exc(), flush=True)
                     show_tb = False
-                print(f"  スキップ ({Path(args[0]).name}): {ex}", flush=True)
+                print(f"  skip ({Path(args[0]).name}): {ex}", flush=True)
                 n_err += 1
     else:
         with ProcessPoolExecutor(max_workers=n_jobs) as ex:
@@ -534,10 +534,10 @@ def collect_stats(
                     if show_tb:
                         traceback.print_exc()
                         show_tb = False
-                    print(f"  スキップ ({Path(futs[fut][0]).name}): {ex}", flush=True)
+                    print(f"  skip ({Path(futs[fut][0]).name}): {ex}", flush=True)
                     n_err += 1
 
-    print(f"  処理: {n_ok} 件, スキップ: {n_err} 件", flush=True)
+    print(f"  processed: {n_ok}, skipped: {n_err}", flush=True)
     return suff_stats, dur_pool, total_ll, total_frames
 
 
@@ -586,7 +586,7 @@ def compute_test_ll(
             args_list.append((str(wav_path), str(lab_path), phonemap, model, hmm_cap))
 
     if not args_list:
-        print("  テストデータなし", flush=True)
+        print("  no test data", flush=True)
         return float("nan")
 
     total_ll = 0.0
@@ -601,7 +601,7 @@ def compute_test_ll(
                 total_frames += nf
                 n_ok += 1
             except Exception as ex:
-                print(f"  テスト評価スキップ ({Path(args[0]).name}): {ex}", flush=True)
+                print(f"  test eval skipped ({Path(args[0]).name}): {ex}", flush=True)
                 n_err += 1
     else:
         with ProcessPoolExecutor(max_workers=n_jobs) as ex:
@@ -747,17 +747,17 @@ def train(
     phonemap     = phonemap_raw["phone_map"]
 
     wav_files = sorted(wav_dir.glob("*.wav"))
-    print(f"訓練ファイル数: {len(wav_files)}", flush=True)
+    print(f"Training files: {len(wav_files)}", flush=True)
 
     # --- グローバル統計（分散フロア計算用）--- キャッシュあれば再利用
     stats_cache = out_path.with_suffix(".globalstats.npz")
     if stats_cache.exists():
-        print(f"グローバル統計キャッシュを読み込み: {stats_cache}", flush=True)
+        print(f"Loaded global stats cache: {stats_cache}", flush=True)
         cache = np.load(stats_cache)
         global_means    = [cache[f"mean_{s}"] for s in range(3)]
         global_vars     = [cache[f"var_{s}"]  for s in range(3)]
     else:
-        print("グローバル統計を計算中...", flush=True)
+        print("Computing global statistics...", flush=True)
         all_feats = [[] for _ in range(3)]
         for i, wav in enumerate(wav_files):
             if i % 500 == 0:
@@ -773,15 +773,15 @@ def train(
         np.savez(stats_cache,
                  **{f"mean_{s}": global_means[s] for s in range(3)},
                  **{f"var_{s}":  global_vars[s]  for s in range(3)})
-        print(f"  グローバル統計を保存: {stats_cache}", flush=True)
+        print(f"  saved global stats: {stats_cache}", flush=True)
     global_varfloors = [np.maximum(v * VAR_FLOOR_RATIO, 1e-6) for v in global_vars]
 
     # --- 初期モデルの準備 ---
     if init_model:
-        print(f"初期モデル読み込み: {init_model}", flush=True)
+        print(f"Loading initial model: {init_model}", flush=True)
         model = load_hsmm(init_model)
     else:
-        print("フラットスタートで初期モデルを構築...", flush=True)
+        print("Building initial model (flat start)...", flush=True)
         model = init_model_flat(
             phonemap, ndim=12,
             global_mean=global_means[0],
@@ -819,7 +819,7 @@ def train(
         # GMM 分割（指定イテレーション到達時）
         if it in split_iters:
             cur_nmix = model.streams[0].gmms[0].nmix
-            print(f"\n--- GMM 分割: nmix {cur_nmix} → {cur_nmix * 2} ---", flush=True)
+            print(f"\n--- GMM split: nmix {cur_nmix} -> {cur_nmix * 2} ---", flush=True)
             model = split_model(model)
         use_align    = (it > 0)
         use_duration = (it > hmm_iters)
@@ -837,7 +837,7 @@ def train(
             mode = f"HMM ブートストラップ" + (f" (T={daem_temp:.3f})" if daem else "")
         else:
             mode = f"HSMM" + (f" (T={daem_temp:.3f})" if daem else "")
-        print(f"\n=== イテレーション {it + 1}/{iters} ({mode}) ===", flush=True)
+        print(f"\n=== Iteration {it + 1}/{iters} ({mode}) ===", flush=True)
 
         if cap_relax_iter is None:
             hmm_cap = None          # cap なし（デフォルト）
@@ -856,10 +856,10 @@ def train(
             if prev_ll is not None:
                 diff = ll_per_frame - prev_ll
                 sign = "+" if diff >= 0 else ""
-                print(f"  訓練対数尤度: {ll_per_frame:.4f} nats/frame  "
+                print(f"  train log-likelihood: {ll_per_frame:.4f} nats/frame  "
                       f"(前回比: {sign}{diff:.4f})", flush=True)
             else:
-                print(f"  訓練対数尤度: {ll_per_frame:.4f} nats/frame", flush=True)
+                print(f"  train log-likelihood: {ll_per_frame:.4f} nats/frame", flush=True)
             prev_ll = ll_per_frame
         else:
             ll_per_frame = float("nan")
@@ -871,7 +871,7 @@ def train(
         if test_wav_dir is not None and test_lab_dir is not None:
             test_ll = compute_test_ll(test_wav_dir, test_lab_dir, phonemap, model,
                                       n_jobs=n_jobs, hmm_cap=hmm_cap)
-            print(f"  テスト対数尤度: {test_ll:.4f} nats/frame", flush=True)
+            print(f"  test log-likelihood: {test_ll:.4f} nats/frame", flush=True)
 
         # ログファイルに記録
         log_file.write(f"{it + 1}\t{ll_per_frame:.6f}\t{test_ll:.6f}\n")
@@ -884,8 +884,8 @@ def train(
 
     # --- 保存 ---
     save_hsmm(model, out_path)
-    print(f"\n訓練完了: {out_path}", flush=True)
-    print(f"ログ: {log_path}", flush=True)
+    print(f"\nTraining finished: {out_path}", flush=True)
+    print(f"Log: {log_path}", flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -893,35 +893,35 @@ def train(
 # ---------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="SHIRO HSMM 訓練")
+    parser = argparse.ArgumentParser(description="HSMM model training (pyshiro-fast)")
     parser.add_argument("--wav_dir",   type=Path, required=True,
-                        help="WAV ファイルディレクトリ")
+                        help="directory of WAV files")
     parser.add_argument("--lab_dir",   type=Path, required=True,
-                        help="初期 .lab ファイルディレクトリ")
+                        help="directory of initial .lab files")
     parser.add_argument("--phonemap",  type=Path,
                         default=Path("SHIRO-Models-Japanese/intunist-jp6_phonemap.json"))
     parser.add_argument("--out",       type=Path, default=Path("my_model.hsmm"),
-                        help="出力 .hsmm パス")
+                        help="output .hsmm path")
     parser.add_argument("--iters",     type=int, default=5,
-                        help="EM 反復回数合計（デフォルト: 5）")
+                        help="total EM iterations (default: 5)")
     parser.add_argument("--hmm_iters", type=int, default=0,
-                        help="HMM ブートストラップ反復回数（デフォルト: 0＝なし）")
+                        help="HMM bootstrap iterations before enabling durations (default: 0)")
     parser.add_argument("--daem", action="store_true",
-                        help="DAEM 訓練を有効化（温度アニーリングで局所最適を回避）")
+                        help="enable DAEM training (temperature annealing)")
     parser.add_argument("--nmix", type=int, default=1,
-                        help="GMM 混合数の上限（1, 2, 4, 8 など。デフォルト: 1）")
+                        help="maximum GMM mixtures, e.g. 1, 2, 4, 8 (default: 1)")
     parser.add_argument("--init_model", type=Path, default=None,
-                        help="初期モデル（省略時はフラットスタート）")
+                        help="initial model (default: flat start)")
     parser.add_argument("--start_iter", type=int, default=0,
-                        help="再開するイテレーション番号（0始まり）。--init_model と併用")
+                        help="iteration to resume from (0-based), used with --init_model")
     parser.add_argument("--jobs", type=int, default=os.cpu_count(),
-                        help=f"並列ワーカー数（デフォルト: CPU コア数）")
+                        help=f"parallel workers (default: CPU cores)")
     parser.add_argument("--cap_relax_iter", type=int, default=None,
-                        help="このイテレーション以降 hmm_cap を 200→1000 に緩和（デフォルト: None=常に200）")
+                        help="relax hmm_cap from 200 to 1000 from this iteration on (default: keep 200)")
     parser.add_argument("--test_wav_dir", type=Path, default=None,
-                        help="テスト WAV ディレクトリ（--test_lab_dir と併用でテスト対数尤度を表示）")
+                        help="held-out WAV directory (with --test_lab_dir, reports test log-likelihood)")
     parser.add_argument("--test_lab_dir", type=Path, default=None,
-                        help="テスト LAB ディレクトリ（--test_wav_dir と併用でテスト対数尤度を表示）")
+                        help="held-out LAB directory (with --test_wav_dir)")
     args = parser.parse_args()
 
     train(

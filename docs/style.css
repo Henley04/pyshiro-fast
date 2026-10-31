@@ -1,0 +1,226 @@
+/* pyshiro-fast documentation — plain, white, text-first. */
+
+:root {
+  --text: #111111;
+  --muted: #666666;
+  --rule: #e4e4e4;
+  --rule-strong: #cccccc;
+  --code-bg: #fafafa;
+  --link: #1a4d8f;
+}
+
+* { box-sizing: border-box; }
+
+html { font-size: 17px; }
+
+body {
+  margin: 0;
+  background: #ffffff;
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+               "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+  line-height: 1.7;
+  overflow-wrap: break-word;
+  -webkit-font-smoothing: antialiased;
+}
+
+.wrap {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+/* header ------------------------------------------------------------- */
+
+.site-header {
+  border-bottom: 1px solid var(--rule);
+  padding: 22px 0 18px;
+  margin-bottom: 48px;
+}
+
+.site-header .wrap {
+  display: block;
+}
+
+.site-name {
+  display: inline-block;
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  text-decoration: none;
+  margin-bottom: 9px;
+}
+
+.site-header nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 15px;
+  font-size: 0.82rem;
+}
+
+.site-header nav a {
+  color: var(--muted);
+  text-decoration: none;
+  padding-bottom: 1px;
+  border-bottom: 1px solid transparent;
+}
+
+.site-header nav a:hover { color: var(--text); }
+
+.site-header nav a[aria-current="page"] {
+  color: var(--text);
+  border-bottom-color: var(--text);
+}
+
+/* text --------------------------------------------------------------- */
+
+h1, h2, h3, h4 {
+  line-height: 1.3;
+  font-weight: 650;
+  margin: 2.4rem 0 0.7rem;
+}
+
+h1 {
+  font-size: 1.9rem;
+  margin-top: 0;
+  letter-spacing: -0.015em;
+}
+
+h2 {
+  font-size: 1.28rem;
+  margin-top: 3rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+h3 { font-size: 1.06rem; margin-top: 2rem; }
+
+h4 { font-size: 0.96rem; margin-top: 1.6rem; color: var(--muted); }
+
+h2 code, h3 code, h4 code {
+  background: none;
+  border: 0;
+  padding: 0;
+  font-size: 0.94em;
+  font-weight: inherit;
+}
+
+p { margin: 0 0 1rem; }
+
+ul, ol { margin: 0 0 1rem; padding-left: 1.4rem; }
+
+li { margin: 0.3rem 0; }
+
+li > p { margin-bottom: 0.4rem; }
+
+strong { font-weight: 650; }
+
+hr {
+  border: 0;
+  border-top: 1px solid var(--rule);
+  margin: 3rem 0;
+}
+
+a { color: var(--link); text-decoration: underline; text-underline-offset: 2px; }
+a:hover { text-decoration-thickness: 2px; }
+
+blockquote {
+  margin: 1.2rem 0;
+  padding: 0.1rem 0 0.1rem 1rem;
+  border-left: 3px solid var(--rule-strong);
+  color: var(--muted);
+}
+
+blockquote p:last-child { margin-bottom: 0; }
+
+/* code --------------------------------------------------------------- */
+
+code {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+               "Liberation Mono", monospace;
+  font-size: 0.855em;
+  background: var(--code-bg);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  padding: 0.1em 0.32em;
+}
+
+pre {
+  background: var(--code-bg);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  padding: 0.9rem 1rem;
+  overflow-x: auto;
+  line-height: 1.55;
+  margin: 0 0 1.2rem;
+}
+
+pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+  font-size: 0.84rem;
+}
+
+/* tables ------------------------------------------------------------- */
+
+.table-wrap {
+  overflow-x: auto;
+  margin: 0 0 1.4rem;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0;
+  font-size: 0.88rem;
+}
+
+th, td {
+  text-align: left;
+  vertical-align: top;
+  line-height: 1.45;
+  padding: 0.45rem 0.5rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+th {
+  font-weight: 650;
+  border-bottom: 1px solid var(--rule-strong);
+}
+
+tbody tr:last-child td { border-bottom: 1px solid var(--rule-strong); }
+
+/* footer ------------------------------------------------------------- */
+
+.site-footer {
+  border-top: 1px solid var(--rule);
+  margin-top: 64px;
+  padding: 24px 0 40px;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.site-footer p { margin: 0 0 0.35rem; }
+.site-footer a { color: var(--muted); }
+.muted { color: var(--muted); }
+
+/* small screens ------------------------------------------------------ */
+
+@media (max-width: 560px) {
+  html { font-size: 16px; }
+  .wrap { padding: 0 18px; }
+  .site-header { margin-bottom: 32px; }
+  h1 { font-size: 1.6rem; }
+  h2 { font-size: 1.18rem; }
+  table { font-size: 0.86rem; }
+  th, td { padding: 0.4rem 0.35rem; }
+  th { white-space: normal; }
+}
+
+@media print {
+  .site-header nav { display: none; }
+  a { color: var(--text); }
+  pre, table { page-break-inside: avoid; }
+}

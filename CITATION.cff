@@ -1,0 +1,35 @@
+cff-version: 1.2.0
+message: "If you use pyshiro-fast in academic work, please cite it as below."
+title: "pyshiro-fast: fast HSMM forced alignment for Japanese singing voice"
+abstract: >-
+  A drop-in fork of pyshiro with a rewritten Viterbi decoder for HSMM forced
+  alignment. Duration-axis pruning, an O(1) sliding-window argmax in the
+  duration-free pass, packed 32-bit backpointers and Hirschberg
+  divide-and-conquer traceback make long-audio alignment 100-700x faster while
+  producing bit-identical segments and log-likelihood.
+type: software
+license: GPL-3.0-only
+version: 1.0.0
+date-released: 2026-10-31
+repository-code: "https://github.com/henley04/pyshiro-fast"
+url: "https://henley04.github.io/pyshiro-fast/"
+keywords:
+  - forced alignment
+  - HSMM
+  - singing voice
+  - Japanese
+  - lyrics
+authors:
+  - name: "pyshiro-fast contributors"
+references:
+  - type: software
+    title: "pyshiro: Python reimplementation of SHIRO"
+    authors:
+      - name: wavtechyukky
+    repository-code: "https://github.com/wavtechyukky/pyshiro"
+    license: GPL-3.0-only
+  - type: software
+    title: "SHIRO: a phoneme-to-speech alignment toolkit"
+    authors:
+      - name: Sleepwalking
+    repository-code: "https://github.com/Sleepwalking/SHIRO"

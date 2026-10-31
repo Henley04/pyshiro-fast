@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Development · pyshiro-fast</title>
+<meta name="description" content="Fast HSMM forced alignment for Japanese singing voice. A drop-in pyshiro fork, 100-700x faster on long audio, identical output.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header">
+  <div class="wrap">
+    <a class="site-name" href="index.html">pyshiro-fast</a>
+    <nav>
+      <a href="installation.html">Install</a>
+      <a href="quickstart.html">Quick start</a>
+      <a href="cli.html">CLI</a>
+      <a href="api.html">API</a>
+      <a href="performance.html">Performance</a>
+      <a href="migration.html">Migration</a>
+      <a href="training.html">Training</a>
+      <a href="models.html">Models</a>
+      <a href="development.html" aria-current="page">Development</a>
+      <a href="faq.html">FAQ</a>
+    </nav>
+  </div>
+</header>
+<main class="wrap">
+<h1>Development</h1>
+<h2>Setup</h2>
+<pre><code class="language-bash">git clone https://github.com/henley04/pyshiro-fast
+cd pyshiro-fast
+python -m venv .venv &amp;&amp; source .venv/bin/activate
+pip install -e &quot;.[dev]&quot;
+</code></pre>
+<h2>Repository layout</h2>
+<pre><code>pyshiro/
+  align.py       alignment engine: DP kernel, Hirschberg, CLI
+  model.py       .hsmm reader/writer, GMM/Duration dataclasses
+  features.py    MFCC / Δ / ΔΔ front end (SHIRO-compatible)
+  labels.py      .lab, TextGrid, Audacity readers and writers
+  phonemes.py    kana-to-phoneme conversion
+  train.py       EM training, CLI
+  untie.py       monophone → triphone expansion
+  bundled.py     access to the bundled models
+  data/          kana2phonemes.table, models/*.hsmm
+tests/           pytest suite (38 tests)
+bench/           speed and memory benchmark
+docs/            Markdown sources, shared stylesheet, generated HTML
+examples/        runnable examples (synthetic demo, file aligner)
+scripts/         docs build, release checks
+example/         upstream sample lyrics and labels
+</code></pre>
+<h2>Tests</h2>
+<pre><code class="language-bash">pytest                      # all
+pytest tests/test_viterbi_exact.py -v
+</code></pre>
+<p><code>tests/test_viterbi_exact.py</code> is the important one. It compares the optimised kernel
+against the original <code>_viterbi_dp</code> on 13 configurations — topology skips, <code>pskip</code> edges,
+mixed transitions, duration-free mode, prefix-topology variants — asserting both the
+segments and the log-likelihood match exactly. Any change to <code>_dp_forward</code>,
+<code>_dp_forward_call</code> or <code>_hirschberg_backtrace</code> must keep it green.</p>
+<p>Tests that need the bundled models locate them through <code>pyshiro.bundled_model_path()</code>, so
+they work both from a source checkout and from an installed wheel.</p>
+<h2>Benchmark</h2>
+<pre><code class="language-bash">python bench/bench_align_speed.py --sweep 10,20,60,120,300
+python bench/bench_align_speed.py --wav song.wav --lyric song.txt
+</code></pre>
+<p><code>--mem-mb 0</code> forces the divide-and-conquer path, which is how the two traceback strategies
+are compared. The sweep uses features sampled deterministically from the model's GMMs;
+DP cost depends only on <code>(T, N)</code>, so the numbers transfer to real audio.</p>
+<p>To compare against upstream, install it in a separate environment and run the same sweep
+with <code>bench/bench_align_speed.py</code> from that checkout.</p>
+<h2>Documentation site</h2>
+<p>The site is plain HTML generated from <code>docs/*.md</code>. No external toolchain:</p>
+<pre><code class="language-bash">python scripts/build_docs.py        # writes docs/*.html
+</code></pre>
+<p>The generator uses a small Markdown subset (headings, paragraphs, lists, tables, fenced
+code, links, inline code, bold/italic) and a single stylesheet: white background, system
+fonts, 720 px measure. Rebuild and commit the HTML whenever you change a <code>.md</code> file.</p>
+<p>GitHub Pages serves the <code>docs/</code> directory of <code>main</code> directly — no Actions step is
+required.</p>
+<h2>Releasing</h2>
+<ol>
+<li>Bump <code>__version__</code> in <code>pyshiro/__init__.py</code>. This is the single source of truth;
+   <code>pyproject.toml</code> reads it dynamically.</li>
+<li>Update <code>CHANGELOG.md</code>.</li>
+<li>Check that the tree is clean and tests pass:</li>
+</ol>
+<p><code>bash
+   pytest
+   python scripts/check_release.py</code></p>
+<ol start="4">
+<li>Build and inspect:</li>
+</ol>
+<p><code>bash
+   python -m build
+   twine check dist/*</code></p>
+<ol start="5">
+<li>Verify the wheel in a clean environment — this catches missing package data:</li>
+</ol>
+<p><code>bash
+   python -m venv /tmp/verify &amp;&amp; /tmp/verify/bin/pip install dist/*.whl
+   /tmp/verify/bin/python -c "import pyshiro; print(pyshiro.load_bundled_model()[0].nstate)"</code></p>
+<ol start="6">
+<li>Tag and push:</li>
+</ol>
+<p><code>bash
+   git tag -a v1.0.0 -m "v1.0.0"
+   git push origin main --tags</code></p>
+<ol start="7">
+<li>Publish. The <code>publish.yml</code> workflow uploads to PyPI via trusted publishing when a
+   <code>v*</code> tag is pushed. It requires a PyPI trusted publisher configured for this
+   repository and a <code>pypi</code> environment in GitHub settings. Manual fallback:</li>
+</ol>
+<p><code>bash
+   twine upload dist/*</code></p>
+<h2>Code style</h2>
+<ul>
+<li>No formatter is enforced; match the surrounding code.</li>
+<li>Comments and docstrings may be Japanese in inherited modules — leave them. New public
+  API docstrings and all user-facing strings are English.</li>
+<li>The DP kernel is performance-critical: measure before and after any change, and keep
+  the equivalence tests green.</li>
+</ul>
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <p>pyshiro-fast · GPL-3.0 · <a href="https://github.com/henley04/pyshiro-fast">source</a> ·
+       <a href="https://pypi.org/project/pyshiro-fast/">PyPI</a></p>
+    <p class="muted">Fork of pyshiro by wavtechyukky. Bundled models belong to their
+       original authors.</p>
+  </div>
+</footer>
+</body>
+</html>

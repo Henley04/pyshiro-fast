@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Performance · pyshiro-fast</title>
+<meta name="description" content="Fast HSMM forced alignment for Japanese singing voice. A drop-in pyshiro fork, 100-700x faster on long audio, identical output.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header">
+  <div class="wrap">
+    <a class="site-name" href="index.html">pyshiro-fast</a>
+    <nav>
+      <a href="installation.html">Install</a>
+      <a href="quickstart.html">Quick start</a>
+      <a href="cli.html">CLI</a>
+      <a href="api.html">API</a>
+      <a href="performance.html" aria-current="page">Performance</a>
+      <a href="migration.html">Migration</a>
+      <a href="training.html">Training</a>
+      <a href="models.html">Models</a>
+      <a href="development.html">Development</a>
+      <a href="faq.html">FAQ</a>
+    </nav>
+  </div>
+</header>
+<main class="wrap">
+<h1>Performance</h1>
+<h2>Results</h2>
+<p>All numbers are wall-clock time for the full two-pass alignment (<code>forced_align_2pass</code>)
+on one x86-64 machine, Python 3.11, numba JIT warm.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th style="text-align: right;">Audio</th>
+<th style="text-align: right;">Frames <code>T</code></th>
+<th style="text-align: right;">States <code>N</code></th>
+<th style="text-align: right;">Upstream</th>
+<th style="text-align: right;">pyshiro-fast</th>
+<th style="text-align: right;">Speedup</th>
+<th style="text-align: right;">Real-time factor</th>
+<th style="text-align: right;">Peak RSS</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;">20 s</td>
+<td style="text-align: right;">4 000</td>
+<td style="text-align: right;">1 005</td>
+<td style="text-align: right;">11.09 s</td>
+<td style="text-align: right;"><strong>0.65 s</strong></td>
+<td style="text-align: right;">17×</td>
+<td style="text-align: right;">31×</td>
+<td style="text-align: right;">737 / 192 MB</td>
+</tr>
+<tr>
+<td style="text-align: right;">60 s</td>
+<td style="text-align: right;">12 000</td>
+<td style="text-align: right;">3 006</td>
+<td style="text-align: right;">251.4 s</td>
+<td style="text-align: right;"><strong>2.50 s</strong></td>
+<td style="text-align: right;">101×</td>
+<td style="text-align: right;">24×</td>
+<td style="text-align: right;">737 / 324 MB</td>
+</tr>
+<tr>
+<td style="text-align: right;">120 s</td>
+<td style="text-align: right;">24 000</td>
+<td style="text-align: right;">6 006</td>
+<td style="text-align: right;">1 986.5 s</td>
+<td style="text-align: right;"><strong>6.79 s</strong></td>
+<td style="text-align: right;">293×</td>
+<td style="text-align: right;">18×</td>
+<td style="text-align: right;">2 401 / 742 MB</td>
+</tr>
+<tr>
+<td style="text-align: right;">300 s</td>
+<td style="text-align: right;">60 000</td>
+<td style="text-align: right;">15 006</td>
+<td style="text-align: right;">≈ 8.7 h †</td>
+<td style="text-align: right;"><strong>91.7 s</strong></td>
+<td style="text-align: right;">≈ 341×</td>
+<td style="text-align: right;">3.3×</td>
+<td style="text-align: right;">≥ 14 GB ‡ / 255 MB</td>
+</tr>
+<tr>
+<td style="text-align: right;">600 s</td>
+<td style="text-align: right;">120 000</td>
+<td style="text-align: right;">30 006</td>
+<td style="text-align: right;">≈ 69 h †</td>
+<td style="text-align: right;"><strong>340.2 s</strong></td>
+<td style="text-align: right;">≈ 730×</td>
+<td style="text-align: right;">1.8×</td>
+<td style="text-align: right;">≥ 57 GB ‡ / 332 MB</td>
+</tr>
+</tbody>
+</table></div>
+<p>† Extrapolated from the three measured points with <code>t ≈ 1.155e-3·s³ + 1.85 s</code>
+(fit error &lt; 0.6 %). Upstream cost is cubic in audio length, so measuring 10 minutes
+would take three days.
+‡ Computed from the three <code>(N, T+1)</code> matrices upstream allocates: <code>score</code> float64 +
+<code>back_d</code> int32 + <code>back_src</code> int32 = 16 B per cell.</p>
+<p>Peak RSS is written as upstream / pyshiro-fast. It is the maximum resident set of the
+whole process, so it includes the interpreter and the feature arrays.</p>
+<p>"Real-time factor" is audio duration divided by alignment time: above 1× means faster
+than the recording plays.</p>
+<h3>End-to-end on real audio</h3>
+<p>A 40 s WAV through the complete CLI (read WAV → MFCC → lyrics → alignment → write
+<code>.lab</code>), both versions on the same machine, both including JIT warm-up:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th></th>
+<th style="text-align: right;">Time</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>upstream</td>
+<td style="text-align: right;">22.7 s</td>
+</tr>
+<tr>
+<td>pyshiro-fast</td>
+<td style="text-align: right;"><strong>1.9 s</strong></td>
+</tr>
+</tbody>
+</table></div>
+<p>The two <code>.lab</code> files agree on every start and end frame (maximum difference: 0), and the
+log-likelihood is the same to the last bit.</p>
+<h2>Why it is faster</h2>
+<p>The upstream kernel loops over every possible duration <code>d</code> for every state and frame,
+giving <code>O(N·T²)</code>. The first pass — which has no duration prior, so <code>ceil = T</code> — is about
+96 % of the runtime. Four changes remove that quadratic factor.</p>
+<h3>1. Exact pruning of the duration axis</h3>
+<p><code>d</code> is only scanned where the predecessor state can actually be:</p>
+<pre><code class="language-text">d ∈ [floor, ceil] ∩ [q − hi(src), q − lo(src)]
+</code></pre>
+<p>Cells outside that range hold <code>-inf</code>, so this skips work without changing the result.
+The second pass benefits most: with a ±60-frame window it becomes effectively
+<code>O(N·window²)</code>.</p>
+<h3>2. <code>O(1)</code> argmax in the duration-free pass</h3>
+<p>Without a duration prior, the recurrence reduces to a sliding-window maximum:</p>
+<pre><code class="language-text">score[n,t] = cum[t] + max_p( score[src,p] − cum[p] ),   p ∈ [t−ceil, t−floor]
+</code></pre>
+<p>The maximum over <code>p</code> is maintained incrementally as <code>t</code> advances, so each cell costs
+<code>O(1)</code> instead of <code>O(t)</code>: <code>O(N·T²) → O(N·T)</code>.</p>
+<p>The value is still computed as <code>score[src,p] + (cum[t] − cum[p])</code> in the original order,
+and <code>ps</code>/<code>cum[p]</code> are cached when the maximum is updated rather than re-read. That is why
+the log-likelihood is bit-identical and not merely close.</p>
+<h3>3. Compact backpointers</h3>
+<p>Upstream stores three <code>(N, T+1)</code> arrays. Here:</p>
+<ul>
+<li><code>d</code> (up to <code>T</code>) and the predecessor offset (up to 7 states) are packed into one
+  <code>int32</code>: <code>(d &lt;&lt; 3) | offset</code>.</li>
+<li>Scores are kept only for the last <code>K</code> rows, where <code>K</code> is the longest possible skip
+  edge (usually 1–3), in a ring buffer.</li>
+</ul>
+<p>16 B per cell becomes 4 B, and the score matrix disappears.</p>
+<h3>4. Hirschberg divide-and-conquer traceback</h3>
+<p>When the packed backpointer matrix would exceed <code>backtrace_mem_mb</code>, the state axis is
+split at its midpoint, forward DP runs on the left half, reverse DP on the right half,
+and the best meeting frame is chosen. Both halves recurse. Memory becomes <code>O(K·T)</code>
+instead of <code>O(N·T)</code>.</p>
+<p>The reverse pass reuses the forward kernel: reverse the state order, reverse the time
+axis, flip the adjacency lists, and replace prefix sums with suffix sums. One DP
+implementation, not two.</p>
+<h2>Cost of the divide-and-conquer path</h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>300 s input</th>
+<th style="text-align: right;">Time</th>
+<th style="text-align: right;">Peak RSS</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>full matrix (<code>backtrace_mem_mb=4096</code>)</td>
+<td style="text-align: right;">45.3 s</td>
+<td style="text-align: right;">≈ 3.4 GiB (computed)</td>
+</tr>
+<tr>
+<td>divide-and-conquer (<code>backtrace_mem_mb=0</code>)</td>
+<td style="text-align: right;">91.7 s</td>
+<td style="text-align: right;">255 MB</td>
+</tr>
+</tbody>
+</table></div>
+<p>The divide-and-conquer path pays <code>log N</code> passes, so it is 2–2.5× slower. It is chosen
+automatically only when the matrix would not fit in the budget. If you have RAM and want
+speed, raise the budget:</p>
+<pre><code class="language-python">segments, loglik = pyshiro.forced_align_2pass(
+    model, streams, state_seq, backtrace_mem_mb=4096)
+</code></pre>
+<p>Both paths return identical segments; this is checked by the test suite.</p>
+<h2>Tuning</h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Goal</th>
+<th>Setting</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>fastest on a machine with RAM</td>
+<td><code>backtrace_mem_mb=4096</code> (or higher)</td>
+</tr>
+<tr>
+<td>lowest memory, speed irrelevant</td>
+<td><code>backtrace_mem_mb=0</code></td>
+</tr>
+<tr>
+<td>default</td>
+<td><code>1024</code> — full matrix up to ~250 M cells, then divide-and-conquer</td>
+</tr>
+<tr>
+<td>long files on a small container</td>
+<td><code>backtrace_mem_mb=256</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>Rough memory for the full-matrix path: <code>4 · N · (T+1)</code> bytes — about 2.3 GiB per
+10 000 states at 300 s. Add ~40 MB for features and the DP context.</p>
+<h2>Reproducing these numbers</h2>
+<p>The benchmark script is in the repository:</p>
+<pre><code class="language-bash"># scaling sweep with deterministic synthetic features
+python bench/bench_align_speed.py --sweep 10,20,60,120,300 \
+    --model pyshiro/data/models/pyshiro-jp-v2.hsmm \
+    --phonemap pyshiro/data/models/pyshiro-jp-v2_phonemap.json
+
+# real audio
+python bench/bench_align_speed.py --wav song.wav --lyric song.txt \
+    --model pyshiro/data/models/pyshiro-jp-v2.hsmm \
+    --phonemap pyshiro/data/models/pyshiro-jp-v2_phonemap.json
+</code></pre>
+<p>The sweep uses features sampled deterministically from the model's own GMMs. DP cost
+depends only on <code>(T, N)</code> — the shape of the lattice — not on feature values, so the
+timing transfers to real audio. Real audio adds feature extraction, which is linear and
+takes well under a second for a few minutes of audio.</p>
+<h2>What is not optimised yet</h2>
+<ul>
+<li>The kernel is memory-bound at roughly 90–130 M cells/s. A tiled sweep (time outer,
+  states inner, blocking both) would improve cache locality and could give another
+  3–5×, at the cost of rewriting the inner loop.</li>
+<li>The duration pass still scans a window of durations. A monotone-queue formulation
+  exists for the Gaussian duration prior but was not implemented, because the second
+  pass is already a small fraction of the total.</li>
+<li>Feature extraction is not parallelised. For batch corpora, <code>--jobs</code> parallelises
+  training only.</li>
+</ul>
+<p>Contributions here are welcome as long as <code>tests/test_viterbi_exact.py</code> stays green.</p>
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <p>pyshiro-fast · GPL-3.0 · <a href="https://github.com/henley04/pyshiro-fast">source</a> ·
+       <a href="https://pypi.org/project/pyshiro-fast/">PyPI</a></p>
+    <p class="muted">Fork of pyshiro by wavtechyukky. Bundled models belong to their
+       original authors.</p>
+  </div>
+</footer>
+</body>
+</html>

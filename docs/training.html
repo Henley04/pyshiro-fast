@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Training · pyshiro-fast</title>
+<meta name="description" content="Fast HSMM forced alignment for Japanese singing voice. A drop-in pyshiro fork, 100-700x faster on long audio, identical output.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header">
+  <div class="wrap">
+    <a class="site-name" href="index.html">pyshiro-fast</a>
+    <nav>
+      <a href="installation.html">Install</a>
+      <a href="quickstart.html">Quick start</a>
+      <a href="cli.html">CLI</a>
+      <a href="api.html">API</a>
+      <a href="performance.html">Performance</a>
+      <a href="migration.html">Migration</a>
+      <a href="training.html" aria-current="page">Training</a>
+      <a href="models.html">Models</a>
+      <a href="development.html">Development</a>
+      <a href="faq.html">FAQ</a>
+    </nav>
+  </div>
+</header>
+<main class="wrap">
+<h1>Training</h1>
+<p><code>pyshiro-fast</code> can train its own <code>.hsmm</code> models from a labelled corpus. The algorithm is
+the same as upstream: EM over GMM emissions and duration distributions, with a
+duration-free bootstrap and optional DAEM annealing.</p>
+<h2>Corpus layout</h2>
+<p>Two directories with matching stems:</p>
+<pre><code>corpus/
+  wav/
+    song01.wav      # 16 kHz mono
+    song02.wav
+  lab/
+    song01.lab      # initial boundaries
+    song02.lab
+</code></pre>
+<p>Labels may be:</p>
+<ul>
+<li>HTK <code>.lab</code> in 100 ns units (ENUNU / NNSVS style),</li>
+<li><code>.lab</code> with seconds,</li>
+<li>Praat TextGrid,</li>
+<li>Audacity labels.</li>
+</ul>
+<p>The format is detected automatically. Labels only need to be roughly right — training
+refines them — but gross errors (missing phonemes, wrong order) will propagate.</p>
+<h2>A first model</h2>
+<pre><code class="language-bash">pyshiro-train --wav_dir corpus/wav --lab_dir corpus/lab \
+    --phonemap my_phonemap.json --out model.hsmm --iters 8
+</code></pre>
+<p><code>--phonemap</code> defines the phoneme set, topology and duration indices. Use the bundled
+<code>jp-v2</code> phonemap as a starting point:</p>
+<pre><code class="language-bash">python -c &quot;import pyshiro; print(pyshiro.bundled_model_path()[1])&quot;
+</code></pre>
+<h2>Recommended settings</h2>
+<p>For a singing-voice corpus of a few hours:</p>
+<pre><code class="language-bash">pyshiro-train --wav_dir corpus/wav --lab_dir corpus/lab \
+    --phonemap my_phonemap.json --out model.hsmm \
+    --hmm_iters 4 --daem --nmix 4 --iters 16 --cap_relax_iter 6
+</code></pre>
+<p>Why each flag:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Reason</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--hmm_iters 4</code></td>
+<td>initialise GMMs without duration constraints first; durations estimated from a bad alignment would be wrong</td>
+</tr>
+<tr>
+<td><code>--daem</code></td>
+<td>anneals the observation likelihood so early iterations do not lock onto a local optimum</td>
+</tr>
+<tr>
+<td><code>--nmix 4</code></td>
+<td>1 mixture per state is too coarse for 12-dim MFCC × 3 streams; 4 is a good accuracy/size trade-off</td>
+</tr>
+<tr>
+<td><code>--iters 16</code></td>
+<td>with <code>--nmix 4</code> the model splits twice (at ~⅓ and ~⅔ of the iterations); each split needs iterations to recover</td>
+</tr>
+<tr>
+<td><code>--cap_relax_iter 6</code></td>
+<td>limits each state to 200 frames early, then relaxes to 1000 for long vowels and pauses</td>
+</tr>
+</tbody>
+</table></div>
+<h2>Monitoring</h2>
+<p>Every iteration prints training log-likelihood per frame:</p>
+<pre><code>=== Iteration 5/16 (hsmm) ===
+  train log-likelihood: -71.8342 nats/frame
+  test log-likelihood: -74.1092 nats/frame
+</code></pre>
+<p>Add <code>--test_wav_dir</code> / <code>--test_lab_dir</code> to track held-out data. A widening gap between
+train and test means overfitting: reduce <code>--nmix</code>, reduce <code>--iters</code>, or add data.</p>
+<p>A per-iteration log is written next to the output model.</p>
+<h2>Checkpoints and resuming</h2>
+<p><code>model.iter001.hsmm</code>, <code>model.iter002.hsmm</code>, … are written after each iteration.</p>
+<pre><code class="language-bash">pyshiro-train ... --init_model model.iter006.hsmm --start_iter 6 --iters 16
+</code></pre>
+<p><code>--start_iter</code> is 0-based and must match the checkpoint number minus one.</p>
+<h2>GMM splitting</h2>
+<p>With <code>--nmix 4</code>, the model starts at 1 mixture and doubles at fixed points, perturbing
+the means to break symmetry. Splitting a converged model is much more effective than
+starting with 4 mixtures from a flat start.</p>
+<p>If you resume from a checkpoint taken after a split, keep <code>--nmix</code> at its original value,
+or the schedule will split again.</p>
+<h2>Cache</h2>
+<p>Global feature statistics are cached between runs to avoid recomputing them. Delete the
+cache file if you change the corpus or the phonemap.</p>
+<h2>Aligning with the trained model</h2>
+<pre><code class="language-bash">pyshiro-align song.wav song.txt --model model.hsmm --phonemap my_phonemap.json
+</code></pre>
+<h2>Triphones</h2>
+<p>If monophone accuracy is not enough, expand the model to context-dependent triphones
+using the contexts observed in the corpus:</p>
+<pre><code class="language-bash">python -m pyshiro.untie \
+    --phonemap my_phonemap.json --model model.hsmm --lab_dir corpus/lab \
+    --out_phonemap tri_phonemap.json --out_model tri.hsmm
+</code></pre>
+<p>Triphone models are several times larger and slower to align with. Measure before
+committing to one.</p>
+<h2>Troubleshooting</h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Symptom</th>
+<th>Likely cause</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>log-likelihood decreases</td>
+<td>label/audio mismatch, or phonemap does not cover the labels</td>
+</tr>
+<tr>
+<td>all durations collapse to the floor</td>
+<td>duration variance estimated from too little data</td>
+</tr>
+<tr>
+<td>training is very slow</td>
+<td>feature extraction dominates; raise <code>--jobs</code>, or precompute</td>
+</tr>
+<tr>
+<td><code>br</code> boundaries drift</td>
+<td>duration model for <code>br</code> is weak; add <code>br</code> to <code>nodur_phonemes</code> when aligning</td>
+</tr>
+</tbody>
+</table></div>
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <p>pyshiro-fast · GPL-3.0 · <a href="https://github.com/henley04/pyshiro-fast">source</a> ·
+       <a href="https://pypi.org/project/pyshiro-fast/">PyPI</a></p>
+    <p class="muted">Fork of pyshiro by wavtechyukky. Bundled models belong to their
+       original authors.</p>
+  </div>
+</footer>
+</body>
+</html>

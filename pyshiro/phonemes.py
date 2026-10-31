@@ -74,7 +74,7 @@ def kana_to_phonemes(text: str, table: dict) -> List[str]:
                 break
 
         if not matched:
-            print(f"  [WARNING] 未対応の文字: '{text[i]}' (U+{ord(text[i]):04X}) → スキップ")
+            print(f"  [WARNING] unsupported character: '{text[i]}' (U+{ord(text[i]):04X}) -> skipped")
             i += 1
 
     return phonemes

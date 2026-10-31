@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Migrating from pyshiro · pyshiro-fast</title>
+<meta name="description" content="Fast HSMM forced alignment for Japanese singing voice. A drop-in pyshiro fork, 100-700x faster on long audio, identical output.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header">
+  <div class="wrap">
+    <a class="site-name" href="index.html">pyshiro-fast</a>
+    <nav>
+      <a href="installation.html">Install</a>
+      <a href="quickstart.html">Quick start</a>
+      <a href="cli.html">CLI</a>
+      <a href="api.html">API</a>
+      <a href="performance.html">Performance</a>
+      <a href="migration.html" aria-current="page">Migration</a>
+      <a href="training.html">Training</a>
+      <a href="models.html">Models</a>
+      <a href="development.html">Development</a>
+      <a href="faq.html">FAQ</a>
+    </nav>
+  </div>
+</header>
+<main class="wrap">
+<h1>Migrating from pyshiro</h1>
+<p><code>pyshiro-fast</code> is a drop-in replacement for the upstream <a href="https://github.com/wavtechyukky/pyshiro">pyshiro</a>.
+Scripts keep working; only paths to the bundled models change.</p>
+<h2>Switch</h2>
+<pre><code class="language-bash">pip uninstall pyshiro
+pip install pyshiro-fast
+</code></pre>
+<p>The import name is still <code>pyshiro</code>:</p>
+<pre><code class="language-python">import pyshiro
+print(pyshiro.__version__)    # 1.0.0 (upstream: 0.1.0)
+</code></pre>
+<h2>What is compatible</h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>import pyshiro</code> / <code>pyshiro.&lt;submodule&gt;</code></td>
+<td>unchanged</td>
+</tr>
+<tr>
+<td><code>.hsmm</code> models, <code>phonemap.json</code></td>
+<td>unchanged, both directions</td>
+</tr>
+<tr>
+<td><code>.lab</code>, TextGrid, Audacity labels</td>
+<td>unchanged</td>
+</tr>
+<tr>
+<td><code>forced_align</code>, <code>forced_align_2pass</code> signatures</td>
+<td>unchanged, two optional keywords added</td>
+</tr>
+<tr>
+<td><code>refine_pau_boundaries</code>, <code>realign_external_labels</code></td>
+<td>unchanged</td>
+</tr>
+<tr>
+<td>CLI <code>pyshiro-align</code>, <code>pyshiro-train</code></td>
+<td>unchanged arguments; help text is now English</td>
+</tr>
+<tr>
+<td>Alignment output</td>
+<td>identical segments and identical <code>loglik</code></td>
+</tr>
+</tbody>
+</table></div>
+<h2>What changed</h2>
+<h3>Models moved into the package</h3>
+<p>Upstream kept models in <code>checkpoint/</code>. They now live in <code>pyshiro/data/models/</code> so they
+can ship inside the wheel.</p>
+<pre><code class="language-python"># before
+model    = pyshiro.load_hsmm(&quot;checkpoint/pyshiro-jp-v2.hsmm&quot;)
+phonemap = pyshiro.load_phonemap(&quot;checkpoint/pyshiro-jp-v2_phonemap.json&quot;)
+
+# after — either use the helper …
+model, phonemap = pyshiro.load_bundled_model()
+
+# … or keep explicit paths
+model    = pyshiro.load_hsmm(&quot;/path/to/pyshiro-jp-v2.hsmm&quot;)
+</code></pre>
+<p>If your code hard-codes <code>checkpoint/</code>, replace it with <code>pyshiro.bundled_model_path()</code>:</p>
+<pre><code class="language-python">hsmm, pm = pyshiro.bundled_model_path(&quot;jp-v2&quot;)
+</code></pre>
+<h3>CLI no longer requires <code>--model</code> / <code>--phonemap</code></h3>
+<pre><code class="language-bash"># before
+pyshiro-align song.wav song.txt \
+    --model checkpoint/pyshiro-jp-v2.hsmm \
+    --phonemap checkpoint/pyshiro-jp-v2_phonemap.json
+
+# after
+pyshiro-align song.wav song.txt
+</code></pre>
+<p>Passing them explicitly still works and takes precedence.</p>
+<h3>Two new keyword arguments</h3>
+<p><code>forced_align</code> and <code>forced_align_2pass</code> accept:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Argument</th>
+<th>Default</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>backtrace_mem_mb</code></td>
+<td><code>1024</code></td>
+<td>memory budget for the backpointer matrix; above it, divide-and-conquer</td>
+</tr>
+<tr>
+<td><code>hmm_cap</code></td>
+<td><code>None</code></td>
+<td>max frames per state in the duration-free pass (already existed upstream; now passable through <code>forced_align_2pass</code>)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Defaults reproduce upstream behaviour, except that the memory guard is active. On inputs
+where upstream would allocate more than 1 GiB of backpointers, the divide-and-conquer
+path runs instead — same result, 2–2.5× slower, much less memory. Raise the budget if
+you prefer speed:</p>
+<pre><code class="language-python">segments, loglik = pyshiro.forced_align_2pass(..., backtrace_mem_mb=4096)
+</code></pre>
+<h3>Reference kernel kept for testing</h3>
+<p>Upstream's <code>_viterbi_dp</code> is still present and still callable. <code>tests/test_viterbi_exact.py</code>
+uses it to assert that the new kernel gives the same segments and log-likelihood on 13
+configurations. Do not delete it; it is the correctness oracle.</p>
+<h3>Package renamed</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th></th>
+<th>Upstream</th>
+<th>This fork</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>PyPI distribution</td>
+<td>— (not published)</td>
+<td><code>pyshiro-fast</code></td>
+</tr>
+<tr>
+<td>Import name</td>
+<td><code>pyshiro</code></td>
+<td><code>pyshiro</code> (alias <code>pyshiro_fast</code>)</td>
+</tr>
+<tr>
+<td>Version</td>
+<td>0.1.0</td>
+<td>1.0.0</td>
+</tr>
+<tr>
+<td>Console scripts</td>
+<td><code>pyshiro-align</code>, <code>pyshiro-train</code></td>
+<td>same</td>
+</tr>
+</tbody>
+</table></div>
+<p>The version jump reflects the API and format stability plus the decoder rewrite, not a
+breaking change.</p>
+<h2>Behavioural differences to be aware of</h2>
+<ol>
+<li><strong>Help and log output are English.</strong> Argument names are unchanged; only strings.</li>
+<li><strong>Bundled models are inside site-packages.</strong> Do not write next to them; use explicit
+   paths for your own models.</li>
+<li><strong>Memory profile differs.</strong> Peak RSS is lower on long files, higher on none.</li>
+<li><strong>The <code>__main__</code> block in <code>pyshiro/align.py</code></strong> now calls the same <code>main()</code> as the
+   console script, instead of a separate demo with hard-coded paths.</li>
+</ol>
+<h2>Rolling back</h2>
+<p>The formats are identical, so a model trained with either version works with the other.
+To go back:</p>
+<pre><code class="language-bash">pip uninstall pyshiro-fast
+pip install git+https://github.com/wavtechyukky/pyshiro
+</code></pre>
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <p>pyshiro-fast · GPL-3.0 · <a href="https://github.com/henley04/pyshiro-fast">source</a> ·
+       <a href="https://pypi.org/project/pyshiro-fast/">PyPI</a></p>
+    <p class="muted">Fork of pyshiro by wavtechyukky. Bundled models belong to their
+       original authors.</p>
+  </div>
+</footer>
+</body>
+</html>
