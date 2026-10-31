@@ -63,7 +63,7 @@ dev = [
 
 [project.urls]
 Homepage   = "https://henley04.github.io/pyshiro-fast/"
-Documentation = "https://henley04.github.io/pyshiro-fast/quickstart.html"
+Documentation = "https://henley04.github.io/pyshiro-fast/"
 Repository = "https://github.com/henley04/pyshiro-fast"
 Issues     = "https://github.com/henley04/pyshiro-fast/issues"
 Changelog  = "https://github.com/henley04/pyshiro-fast/blob/main/CHANGELOG.md"
