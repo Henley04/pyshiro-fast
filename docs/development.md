@@ -55,7 +55,10 @@ python bench/bench_align_speed.py --wav song.wav --lyric song.txt
 
 `--mem-mb 0` forces the divide-and-conquer path, which is how the two traceback strategies
 are compared. The sweep uses features sampled deterministically from the model's GMMs;
-DP cost depends only on `(T, N)`, so the numbers transfer to real audio.
+DP cost depends only on `(T, N)`, so the numbers transfer to real audio. The GTSinger
+numbers in [Performance](performance.md#validation) were produced with
+`bench/real_audio_check.py`, which takes a plain phone list and an optional reference
+timing.
 
 To compare against upstream, install it in a separate environment and run the same sweep
 with `bench/bench_align_speed.py` from that checkout.

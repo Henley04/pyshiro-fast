@@ -25,10 +25,75 @@ whole process, so it includes the interpreter and the feature arrays.
 "Real-time factor" is audio duration divided by alignment time: above 1× means faster
 than the recording plays.
 
-### End-to-end on real audio
+## Validation
 
-A 40 s WAV through the complete CLI (read WAV → MFCC → lyrics → alignment → write
-`.lab`), both versions on the same machine, both including JIT warm-up:
+Two kinds of input, for two different questions.
+
+### Exactness and long audio: synthetic features
+
+The scaling table above uses deterministic feature streams sampled from the model's own
+GMMs, with known segment boundaries. They serve two purposes: the 10-minute case can be
+measured at all (upstream would need about three days), and both implementations can be
+fed byte-for-byte identical input, so the comparison is exact rather than statistical.
+
+DP cost depends only on the shape of the lattice, `(T, N)` — the loop structure and the
+pruning windows are derived from the state sequence, never from feature values — so the
+timing transfers to real audio. Feature extraction is the only extra cost there, and it
+is linear.
+
+### Usability: four real GTSinger clips
+
+[GTSinger](https://huggingface.co/datasets/GTSinger/GTSinger) (NeurIPS 2024, CC BY-NC-SA
+4.0) Japanese subset, two singers, four techniques. Phone lists come from the corpus
+annotation, mapped onto the pyshiro inventory — no lyrics front-end involved. The audio
+is **not** redistributed here; `bench/real_audio_check.py` reproduces the numbers against
+your own copy. If you cite these figures, cite the corpus as well: Zhang et al.,
+*GTSinger: A Global Multi-Technique Singing Corpus*, NeurIPS 2024
+([arXiv:2409.13832](https://arxiv.org/abs/2409.13832)).
+
+| Clip | Voice | Audio | Phones | Upstream | pyshiro-fast | Speedup |
+|---:|---|---:|---:|---:|---:|---:|
+| 1 | Tenor, vibrato | 32.06 s | 69 | 4.81 s | **0.87 s** | 5.5× |
+| 2 | Tenor, mixed / falsetto | 27.97 s | 110 | 7.24 s | **0.88 s** | 8.2× |
+| 3 | Soprano, vibrato | 21.90 s | 41 | 2.03 s | **0.52 s** | 3.9× |
+| 4 | Soprano, breathy | 17.82 s | 41 | 1.64 s | **0.60 s** | 2.7× |
+
+Lattice sizes `(T, N)`: 6 412/207, 5 593/330, 4 380/123, 3 564/123.
+
+All four clips: **every segment and the log-likelihood are bit-identical** between the two
+versions (`np.array_equal` on the segment array, `==` on the float64 log-likelihood).
+
+The speedups are smaller than in the table above because these clips are short and few
+phonemes: upstream's cost grows with `N·T·D`, and with 41–110 phones the quadratic term
+has not taken over yet. At 20 s with 1 005 states upstream already needs 11 s; here 32 s
+with 207 states costs 4.8 s.
+
+Two independent sanity checks per clip: obstruent duration, which the acoustics
+constrain regardless of any annotation, and the deviation from the corpus' word
+boundaries (interior boundaries only).
+
+| Clip | Obstruent median | p90 | max | Word boundary median | Within 50 ms |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 65 ms | 167 ms | 185 ms | — | — |
+| 2 | 60 ms | 162 ms | 175 ms | 67 ms | 45 % |
+| 3 | 70 ms | 195 ms | 230 ms | 76 ms | 39 % |
+| 4 | 95 ms | 155 ms | 155 ms | 40 ms | 57 % |
+
+Stops, fricatives and affricates stay short on every clip — no consonant swallows a held
+note, which is the failure mode you get when an aligner drifts.
+
+Clip 1 has no boundary figure because its own annotation is degenerate: 46 % of its 69
+phones sit exactly on the corpus' 30 ms floor and a single phone is 5.17 s, which packs the
+first 20 phones into under one second — physically impossible for sung Japanese, and not
+something any aligner can match. Its obstruent statistics are still valid, and they are
+the reason it is reported rather than dropped. For clips 2–4 the residual is a few tens of
+milliseconds, the order of the annotation's own 30 ms quantisation.
+
+### Full CLI on a synthetic waveform
+
+A 40 s WAV generated in NumPy (harmonic stack with vibrato, amplitude modulation and
+noise bursts) through the complete CLI — read WAV → MFCC → lyrics → alignment → write
+`.lab` — both versions, both including JIT warm-up:
 
 | | Time |
 |---|---:|
@@ -36,7 +101,9 @@ A 40 s WAV through the complete CLI (read WAV → MFCC → lyrics → alignment 
 | pyshiro-fast | **1.9 s** |
 
 The two `.lab` files agree on every start and end frame (maximum difference: 0), and the
-log-likelihood is the same to the last bit.
+log-likelihood is the same to the last bit. The waveform is synthetic; it exercises the
+whole pipeline but says nothing about alignment quality — that is what the GTSinger clips
+above are for.
 
 ## Why it is faster
 
@@ -133,16 +200,23 @@ python bench/bench_align_speed.py --sweep 10,20,60,120,300 \
     --model pyshiro/data/models/pyshiro-jp-v2.hsmm \
     --phonemap pyshiro/data/models/pyshiro-jp-v2_phonemap.json
 
-# real audio
+# real audio through the CLI path
 python bench/bench_align_speed.py --wav song.wav --lyric song.txt \
     --model pyshiro/data/models/pyshiro-jp-v2.hsmm \
     --phonemap pyshiro/data/models/pyshiro-jp-v2_phonemap.json
+
+# one recording, with sanity statistics (and an optional reference phone timing)
+python bench/real_audio_check.py --wav clip.wav \
+    --phones "pau,a,k,a,i,g,u,ts,u,pau" \
+    --ref-durs "0.30,0.05,0.12,0.40,0.08,0.15,0.07,0.20,0.35,0.25"
 ```
 
-The sweep uses features sampled deterministically from the model's own GMMs. DP cost
-depends only on `(T, N)` — the shape of the lattice — not on feature values, so the
-timing transfers to real audio. Real audio adds feature extraction, which is linear and
-takes well under a second for a few minutes of audio.
+`real_audio_check.py` is what produced the GTSinger tables above; it takes a plain phone
+list, so it works with any annotated corpus.
+
+The sweep uses features sampled deterministically from the model's own GMMs, which is what
+makes the exact comparison in the first section possible. Real audio adds feature
+extraction — linear, and well under a second for a few minutes.
 
 ## What is not optimised yet
 

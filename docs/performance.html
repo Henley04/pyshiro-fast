@@ -105,9 +105,144 @@ would take three days.
 whole process, so it includes the interpreter and the feature arrays.</p>
 <p>"Real-time factor" is audio duration divided by alignment time: above 1× means faster
 than the recording plays.</p>
-<h3>End-to-end on real audio</h3>
-<p>A 40 s WAV through the complete CLI (read WAV → MFCC → lyrics → alignment → write
-<code>.lab</code>), both versions on the same machine, both including JIT warm-up:</p>
+<h2>Validation</h2>
+<p>Two kinds of input, for two different questions.</p>
+<h3>Exactness and long audio: synthetic features</h3>
+<p>The scaling table above uses deterministic feature streams sampled from the model's own
+GMMs, with known segment boundaries. They serve two purposes: the 10-minute case can be
+measured at all (upstream would need about three days), and both implementations can be
+fed byte-for-byte identical input, so the comparison is exact rather than statistical.</p>
+<p>DP cost depends only on the shape of the lattice, <code>(T, N)</code> — the loop structure and the
+pruning windows are derived from the state sequence, never from feature values — so the
+timing transfers to real audio. Feature extraction is the only extra cost there, and it
+is linear.</p>
+<h3>Usability: four real GTSinger clips</h3>
+<p><a href="https://huggingface.co/datasets/GTSinger/GTSinger">GTSinger</a> (NeurIPS 2024, CC BY-NC-SA
+4.0) Japanese subset, two singers, four techniques. Phone lists come from the corpus
+annotation, mapped onto the pyshiro inventory — no lyrics front-end involved. The audio
+is <strong>not</strong> redistributed here; <code>bench/real_audio_check.py</code> reproduces the numbers against
+your own copy. If you cite these figures, cite the corpus as well: Zhang et al.,
+<em>GTSinger: A Global Multi-Technique Singing Corpus</em>, NeurIPS 2024
+(<a href="https://arxiv.org/abs/2409.13832">arXiv:2409.13832</a>).</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th style="text-align: right;">Clip</th>
+<th>Voice</th>
+<th style="text-align: right;">Audio</th>
+<th style="text-align: right;">Phones</th>
+<th style="text-align: right;">Upstream</th>
+<th style="text-align: right;">pyshiro-fast</th>
+<th style="text-align: right;">Speedup</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;">1</td>
+<td>Tenor, vibrato</td>
+<td style="text-align: right;">32.06 s</td>
+<td style="text-align: right;">69</td>
+<td style="text-align: right;">4.81 s</td>
+<td style="text-align: right;"><strong>0.87 s</strong></td>
+<td style="text-align: right;">5.5×</td>
+</tr>
+<tr>
+<td style="text-align: right;">2</td>
+<td>Tenor, mixed / falsetto</td>
+<td style="text-align: right;">27.97 s</td>
+<td style="text-align: right;">110</td>
+<td style="text-align: right;">7.24 s</td>
+<td style="text-align: right;"><strong>0.88 s</strong></td>
+<td style="text-align: right;">8.2×</td>
+</tr>
+<tr>
+<td style="text-align: right;">3</td>
+<td>Soprano, vibrato</td>
+<td style="text-align: right;">21.90 s</td>
+<td style="text-align: right;">41</td>
+<td style="text-align: right;">2.03 s</td>
+<td style="text-align: right;"><strong>0.52 s</strong></td>
+<td style="text-align: right;">3.9×</td>
+</tr>
+<tr>
+<td style="text-align: right;">4</td>
+<td>Soprano, breathy</td>
+<td style="text-align: right;">17.82 s</td>
+<td style="text-align: right;">41</td>
+<td style="text-align: right;">1.64 s</td>
+<td style="text-align: right;"><strong>0.60 s</strong></td>
+<td style="text-align: right;">2.7×</td>
+</tr>
+</tbody>
+</table></div>
+<p>Lattice sizes <code>(T, N)</code>: 6 412/207, 5 593/330, 4 380/123, 3 564/123.</p>
+<p>All four clips: <strong>every segment and the log-likelihood are bit-identical</strong> between the two
+versions (<code>np.array_equal</code> on the segment array, <code>==</code> on the float64 log-likelihood).</p>
+<p>The speedups are smaller than in the table above because these clips are short and few
+phonemes: upstream's cost grows with <code>N·T·D</code>, and with 41–110 phones the quadratic term
+has not taken over yet. At 20 s with 1 005 states upstream already needs 11 s; here 32 s
+with 207 states costs 4.8 s.</p>
+<p>Two independent sanity checks per clip: obstruent duration, which the acoustics
+constrain regardless of any annotation, and the deviation from the corpus' word
+boundaries (interior boundaries only).</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th style="text-align: right;">Clip</th>
+<th style="text-align: right;">Obstruent median</th>
+<th style="text-align: right;">p90</th>
+<th style="text-align: right;">max</th>
+<th style="text-align: right;">Word boundary median</th>
+<th style="text-align: right;">Within 50 ms</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">65 ms</td>
+<td style="text-align: right;">167 ms</td>
+<td style="text-align: right;">185 ms</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+</tr>
+<tr>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">60 ms</td>
+<td style="text-align: right;">162 ms</td>
+<td style="text-align: right;">175 ms</td>
+<td style="text-align: right;">67 ms</td>
+<td style="text-align: right;">45 %</td>
+</tr>
+<tr>
+<td style="text-align: right;">3</td>
+<td style="text-align: right;">70 ms</td>
+<td style="text-align: right;">195 ms</td>
+<td style="text-align: right;">230 ms</td>
+<td style="text-align: right;">76 ms</td>
+<td style="text-align: right;">39 %</td>
+</tr>
+<tr>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">95 ms</td>
+<td style="text-align: right;">155 ms</td>
+<td style="text-align: right;">155 ms</td>
+<td style="text-align: right;">40 ms</td>
+<td style="text-align: right;">57 %</td>
+</tr>
+</tbody>
+</table></div>
+<p>Stops, fricatives and affricates stay short on every clip — no consonant swallows a held
+note, which is the failure mode you get when an aligner drifts.</p>
+<p>Clip 1 has no boundary figure because its own annotation is degenerate: 46 % of its 69
+phones sit exactly on the corpus' 30 ms floor and a single phone is 5.17 s, which packs the
+first 20 phones into under one second — physically impossible for sung Japanese, and not
+something any aligner can match. Its obstruent statistics are still valid, and they are
+the reason it is reported rather than dropped. For clips 2–4 the residual is a few tens of
+milliseconds, the order of the annotation's own 30 ms quantisation.</p>
+<h3>Full CLI on a synthetic waveform</h3>
+<p>A 40 s WAV generated in NumPy (harmonic stack with vibrato, amplitude modulation and
+noise bursts) through the complete CLI — read WAV → MFCC → lyrics → alignment → write
+<code>.lab</code> — both versions, both including JIT warm-up:</p>
 <div class="table-wrap"><table>
 <thead>
 <tr>
@@ -127,7 +262,9 @@ than the recording plays.</p>
 </tbody>
 </table></div>
 <p>The two <code>.lab</code> files agree on every start and end frame (maximum difference: 0), and the
-log-likelihood is the same to the last bit.</p>
+log-likelihood is the same to the last bit. The waveform is synthetic; it exercises the
+whole pipeline but says nothing about alignment quality — that is what the GTSinger clips
+above are for.</p>
 <h2>Why it is faster</h2>
 <p>The upstream kernel loops over every possible duration <code>d</code> for every state and frame,
 giving <code>O(N·T²)</code>. The first pass — which has no duration prior, so <code>ceil = T</code> — is about
@@ -230,15 +367,21 @@ python bench/bench_align_speed.py --sweep 10,20,60,120,300 \
     --model pyshiro/data/models/pyshiro-jp-v2.hsmm \
     --phonemap pyshiro/data/models/pyshiro-jp-v2_phonemap.json
 
-# real audio
+# real audio through the CLI path
 python bench/bench_align_speed.py --wav song.wav --lyric song.txt \
     --model pyshiro/data/models/pyshiro-jp-v2.hsmm \
     --phonemap pyshiro/data/models/pyshiro-jp-v2_phonemap.json
+
+# one recording, with sanity statistics (and an optional reference phone timing)
+python bench/real_audio_check.py --wav clip.wav \
+    --phones &quot;pau,a,k,a,i,g,u,ts,u,pau&quot; \
+    --ref-durs &quot;0.30,0.05,0.12,0.40,0.08,0.15,0.07,0.20,0.35,0.25&quot;
 </code></pre>
-<p>The sweep uses features sampled deterministically from the model's own GMMs. DP cost
-depends only on <code>(T, N)</code> — the shape of the lattice — not on feature values, so the
-timing transfers to real audio. Real audio adds feature extraction, which is linear and
-takes well under a second for a few minutes of audio.</p>
+<p><code>real_audio_check.py</code> is what produced the GTSinger tables above; it takes a plain phone
+list, so it works with any annotated corpus.</p>
+<p>The sweep uses features sampled deterministically from the model's own GMMs, which is what
+makes the exact comparison in the first section possible. Real audio adds feature
+extraction — linear, and well under a second for a few minutes.</p>
 <h2>What is not optimised yet</h2>
 <ul>
 <li>The kernel is memory-bound at roughly 90–130 M cells/s. A tiled sweep (time outer,

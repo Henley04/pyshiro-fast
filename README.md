@@ -40,9 +40,18 @@ same `.lab` / TextGrid output, same Python API, and — verified by regression t
 ‡ Computed from the three `(N, T+1)` matrices upstream allocates (16 B per cell).
 Rows 20/60/120 s are measured on one machine, same input, same JIT settings.
 
-End-to-end on a real 40 s WAV through the full CLI (feature extraction → lyrics →
-alignment → `.lab`): **22.7 s → 1.9 s**, and both versions write identical frame
-boundaries.
+**Verified on real singing.** Four clips from the GTSinger Japanese subset (18–32 s, two
+singers, four techniques), phone lists taken from the corpus annotation: every segment and
+every log-likelihood is bit-identical between the two versions, and alignment is 2.7–8.2×
+faster (5.5× over the four). Obstruent durations stay at 60–95 ms median on all four,
+which is the check that the output is still acoustically sane. Against the corpus'
+annotated word boundaries the median deviation is 40–76 ms — the order of the annotation's
+own 30 ms quantisation. One of the four clips is excluded from that last figure because
+its annotation is internally degenerate; the details are in
+[Performance](https://henley04.github.io/pyshiro-fast/performance.html#validation).
+
+End-to-end on a 40 s WAV through the full CLI (feature extraction → lyrics → alignment →
+`.lab`): **22.7 s → 1.9 s**, and both versions write identical frame boundaries.
 
 ## How it is faster
 

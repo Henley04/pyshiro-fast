@@ -27,7 +27,21 @@ kernel.
   duration-free mode and prefix-topology variants. Segments and log-likelihood must match
   exactly.
 - **`bench/bench_align_speed.py`**: scaling sweep and real-audio benchmark.
+- **`bench/real_audio_check.py`**: align one recording from a plain phone list and print
+  sanity statistics (obstruent durations, optional deviation from a reference timing).
 - **Documentation site** under `docs/` (static HTML, GitHub Pages ready).
+
+### Validated
+
+- **Exactness.** Segments and log-likelihood are bit-identical to upstream on
+  deterministic GMM-sampled features at 20/60/120 s, on the two traceback strategies at
+  300 s, and on four real GTSinger Japanese clips (18–32 s, two singers, four
+  techniques).
+- **Usability on real singing.** Obstruent durations stay at 60–95 ms median (max 230 ms)
+  across the four clips; word boundaries deviate from the corpus annotation by 40–76 ms
+  median, the order of the annotation's own 30 ms quantisation. One clip is excluded from
+  that figure because its annotation is degenerate — see
+  [docs/performance.md](docs/performance.md#validation).
 
 ### Changed
 
