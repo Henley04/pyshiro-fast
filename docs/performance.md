@@ -83,8 +83,8 @@ Stops, fricatives and affricates stay short on every clip — no consonant swall
 note, which is the failure mode you get when an aligner drifts.
 
 Clip 1 has no boundary figure because its own annotation is degenerate: 46 % of its 69
-phones sit exactly on the corpus' 30 ms floor and a single phone is 5.17 s, which packs the
-first 20 phones into under one second — physically impossible for sung Japanese, and not
+phones are 50 ms or shorter (22 of them exactly the corpus' 30 ms floor) and a single
+phone is 5.17 s, which packs the first 20 phones into under one second — physically impossible for sung Japanese, and not
 something any aligner can match. Its obstruent statistics are still valid, and they are
 the reason it is reported rather than dropped. For clips 2–4 the residual is a few tens of
 milliseconds, the order of the annotation's own 30 ms quantisation.
