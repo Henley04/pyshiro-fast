@@ -22,14 +22,13 @@ import pytest
 
 from pyshiro.align import _gmm_loglik_frames, build_state_sequence, load_phonemap
 from pyshiro.model import GMM, load_hsmm
+from pyshiro.bundled import bundled_model_path
 
-REPO = Path(__file__).resolve().parent.parent
-MODEL_PATH = REPO / "checkpoint" / "pyshiro-jp-v1.hsmm"
-PHONEMAP_PATH = REPO / "checkpoint" / "pyshiro-jp-v1_phonemap.json"
+MODEL_PATH, PHONEMAP_PATH = bundled_model_path("jp-v1")
 
 needs_model = pytest.mark.skipif(
     not MODEL_PATH.exists() or not PHONEMAP_PATH.exists(),
-    reason="checkpoint モデルが無い")
+    reason="bundled jp-v1 model not available")
 
 
 def _reference_loglik(gmm: GMM, obs: np.ndarray) -> np.ndarray:

@@ -377,6 +377,516 @@ def _viterbi_dp(N, T,
 
 
 # ---------------------------------------------------------------------------
+# 高速 Viterbi DP カーネル（Numba JIT）
+#
+# 上の `_viterbi_dp` は参照実装として残してある（互換性検証用）。
+# (N, T+1) の score / back_d / back_src を 3 枚確保し、内側ループが
+# d ∈ [floor, min(ceil, t)] を総当りするため、長尺音声では
+#   時間 O(N·T²)、メモリ O(N·T)·16 byte
+# になる。以下は **結果を 1 フレームも変えずに** 次を適用した実装:
+#
+#   1. d の探索範囲を「先行状態が到達しうる時間窓」との積に限定（厳密な枝刈り）
+#   2. HMM パス（継続時間分布なし）は窓付き最大値の逐次更新で 1 セル O(1)
+#      → 総当り O(T) を O(1) に。値は原式 ps + (cum[t]-cum[p]) のまま計算する
+#   3. バックポインタを int32 1 枚に詰める（d:29bit + 先行状態オフセット:3bit）
+#      score 行列は直前 K 行のリングバッファのみ
+#   4. それでも収まらない巨大入力では Hirschberg 型の分割統治で
+#      バックトラックを実行し、メモリを O(K·T)（系列長に線形）に落とす
+# ---------------------------------------------------------------------------
+
+BP_SHIFT = 3                     # bp 下位ビットに (n - src) を格納
+BP_MASK  = (1 << BP_SHIFT) - 1
+
+
+@numba.njit(cache=True)
+def _dp_forward(n_base, N, W, t_base,
+                cum_ll,        # (n_row, T_total+1) 累積対数尤度
+                out_row,       # (N_total,) int32
+                floors,        # (N_total,) int32
+                ceils,         # (N_total,) int32
+                dur_means,     # (N_total,) float64
+                dur_vars,      # (N_total,) float64
+                t_lo,          # (N_total,) int32  絶対フレーム
+                t_hi,          # (N_total,) int32
+                use_duration,
+                topo_src,      # (N_total, max_topo) int32
+                topo_log,      # (N_total, max_topo) float64
+                pskip_src,     # (N_total, max_pskip) int32
+                pskip_log,     # (N_total, max_pskip) float64
+                K,             # リングバッファ行数（= 最大参照段数 + 1）
+                bp,            # (N, W+1) int32  ローカル添字
+                store_bp):
+    """状態 n_base .. n_base+N-1、時刻 [t_base, t_base+W] の前向き Viterbi。
+
+    戻り値は最終状態（n_base+N-1）のスコア列（長さ W+1、q = 0..W）。
+    bp には (d << BP_SHIFT) | (n - src) を格納する。
+    """
+    NEG    = -1e30
+    TWO_PI = 2.0 * math.pi
+    max_topo  = topo_src.shape[1]
+    max_pskip = pskip_src.shape[1]
+    ncol      = W + 1
+    nsrc_max  = 1 + max_topo
+
+    sbuf  = np.full((K, ncol), NEG)
+    last  = np.full(ncol, NEG)
+    srcs  = np.empty(nsrc_max, dtype=np.int32)
+    slgs  = np.empty(nsrc_max, dtype=np.float64)
+    bestv = np.empty(nsrc_max, dtype=np.float64)
+    bestp = np.empty(nsrc_max, dtype=np.int32)
+    bests = np.empty(nsrc_max, dtype=np.float64)   # score[bestp]
+    bestc = np.empty(nsrc_max, dtype=np.float64)   # cum[bestp]
+    lastp = np.empty(nsrc_max, dtype=np.int32)
+
+    # --- 初期状態: n_base が t_base から始まり q フレーム伸びる ---
+    g0  = n_base
+    r0  = out_row[g0]
+    fl0 = floors[g0]
+    ce0 = ceils[g0]
+    lo0 = t_lo[g0] - t_base
+    if lo0 < 0:
+        lo0 = 0
+    hi0 = t_hi[g0] - t_base
+    if hi0 > W:
+        hi0 = W
+    dv0     = dur_vars[g0]
+    dm0     = dur_means[g0]
+    use_d0  = use_duration and dv0 > 0.0
+    ld0     = math.log(TWO_PI * dv0) if use_d0 else 0.0
+    for q in range(lo0, hi0 + 1):
+        d = q
+        if d < fl0 or d > ce0:
+            continue
+        sc = cum_ll[r0, t_base + q] - cum_ll[r0, t_base]
+        if use_d0:
+            sc += -0.5 * ((d - dm0) * (d - dm0) / dv0 + ld0)
+        sbuf[0, q] = sc
+        if store_bp:
+            bp[0, q] = np.int32((d << BP_SHIFT) | 1)
+
+    # --- 再帰 ---
+    for lni in range(1, N):
+        g  = n_base + lni
+        fl = floors[g]
+        ce = ceils[g]
+        rw = out_row[g]
+        dm = dur_means[g]
+        dv = dur_vars[g]
+        use_dur = use_duration and dv > 0.0
+        ld = math.log(TWO_PI * dv) if use_dur else 0.0
+
+        lo_n = t_lo[g] - t_base
+        if lo_n < 0:
+            lo_n = 0
+        hi_n = t_hi[g] - t_base
+        if hi_n > W:
+            hi_n = W
+
+        if hi_n < lo_n:
+            continue
+
+        for q in range(ncol):
+            sbuf[lni % K, q] = NEG
+
+        # 先行状態（通常遷移 + topology スキップ）
+        ns = 1
+        srcs[0] = g - 1
+        slgs[0] = 0.0
+        for ki in range(max_topo):
+            s = topo_src[g, ki]
+            if s < 0:
+                break
+            srcs[ns] = s
+            slgs[ns] = topo_log[g, ki]
+            ns += 1
+
+        lo_min = t_lo[srcs[0]] - t_base
+        hi_max = t_hi[srcs[0]] - t_base
+        for k in range(1, ns):
+            v = t_lo[srcs[k]] - t_base
+            if v < lo_min:
+                lo_min = v
+            v = t_hi[srcs[k]] - t_base
+            if v > hi_max:
+                hi_max = v
+        if lo_min < 0:
+            lo_min = 0
+        if hi_max > W:
+            hi_max = W
+
+        if (not use_dur) and ce >= hi_n - lo_min:
+            # --- 継続時間分布なし: 窓付き最大値の逐次更新（1 セル O(1)） ---
+            # 窓は p ∈ [t_lo[src], min(t - fl, t_hi[src])]。
+            # ce >= hi_n - lo_min より下限は常に t_lo[src] 以下なので
+            # 「p を増やしながらの最大値更新」で厳密に一致する。
+            for k in range(ns):
+                bestv[k] = NEG
+                bestp[k] = -1
+                bests[k] = NEG
+                bestc[k] = 0.0
+                v = t_lo[srcs[k]] - t_base
+                if v < 0:
+                    v = 0
+                lastp[k] = v - 1
+
+            for q in range(lo_n, hi_n + 1):
+                cum_t    = cum_ll[rw, t_base + q]
+                best_sc  = NEG
+                best_d   = 0
+                best_src = g - 1
+                best_pp  = -1
+                for k in range(ns):
+                    s    = srcs[k]
+                    sr   = (s - n_base) % K
+                    hi_s = t_hi[s] - t_base
+                    if hi_s > q:
+                        hi_s = q
+                    lim = q - fl
+                    if lim > hi_s:
+                        lim = hi_s
+                    p = lastp[k]
+                    while p < lim:
+                        p += 1
+                        sv = sbuf[sr, p]
+                        if sv > NEG:
+                            vv = sv - cum_ll[rw, t_base + p]
+                            if vv >= bestv[k] or bestp[k] < 0:
+                                # 最大値更新時に score / cum を控えておく。
+                                # 毎セル bestp を再参照するとランダムアクセスに
+                                # なるため（長尺音声で顕著なボトルネック）。
+                                bestv[k] = vv
+                                bestp[k] = p
+                                bests[k] = sv
+                                bestc[k] = cum_ll[rw, t_base + p]
+                    lastp[k] = p
+                    if bestp[k] >= 0:
+                        # 値は原式と同じ順序で計算する（丸め誤差を持ち込まない）
+                        cand = bests[k] + (cum_t - bestc[k]) + slgs[k]
+                        if cand > best_sc or (cand == best_sc and bestp[k] > best_pp):
+                            best_sc  = cand
+                            best_d   = q - bestp[k]
+                            best_src = s
+                            best_pp  = bestp[k]
+
+                for ki in range(max_pskip):
+                    s = pskip_src[g, ki]
+                    if s < 0:
+                        break
+                    ps = sbuf[(s - n_base) % K, q]
+                    if ps > NEG:
+                        cand = ps + pskip_log[g, ki]
+                        if cand > best_sc:
+                            best_sc  = cand
+                            best_d   = 0
+                            best_src = s
+                            best_pp  = q
+
+                sbuf[lni % K, q] = best_sc
+                if store_bp:
+                    bp[lni, q] = np.int32((best_d << BP_SHIFT) | (g - best_src))
+        else:
+            # --- 継続時間分布あり、または窓が広い場合: d を直接走査 ---
+            # ループ範囲は「先行状態の時間窓」との積に限定（厳密）。
+            for q in range(lo_n, hi_n + 1):
+                cum_t    = cum_ll[rw, t_base + q]
+                best_sc  = NEG
+                best_d   = 0
+                best_src = g - 1
+
+                dlo = fl
+                v = q - hi_max
+                if v > dlo:
+                    dlo = v
+                dhi = ce
+                v = q - lo_min
+                if v < dhi:
+                    dhi = v
+                if dhi > q:
+                    dhi = q
+
+                for d in range(dlo, dhi + 1):
+                    p  = q - d
+                    ll = cum_t - cum_ll[rw, t_base + p]
+                    if use_dur:
+                        ll += -0.5 * ((d - dm) * (d - dm) / dv + ld)
+                    ps = sbuf[(g - 1 - n_base) % K, p]
+                    if ps > NEG:
+                        cand = ps + ll
+                        if cand > best_sc:
+                            best_sc  = cand
+                            best_d   = d
+                            best_src = g - 1
+                    for k in range(1, ns):
+                        s  = srcs[k]
+                        ps = sbuf[(s - n_base) % K, p]
+                        if ps > NEG:
+                            cand = ps + slgs[k] + ll
+                            if cand > best_sc:
+                                best_sc  = cand
+                                best_d   = d
+                                best_src = s
+
+                for ki in range(max_pskip):
+                    s = pskip_src[g, ki]
+                    if s < 0:
+                        break
+                    ps = sbuf[(s - n_base) % K, q]
+                    if ps > NEG:
+                        cand = ps + pskip_log[g, ki]
+                        if cand > best_sc:
+                            best_sc  = cand
+                            best_d   = 0
+                            best_src = s
+
+                sbuf[lni % K, q] = best_sc
+                if store_bp:
+                    bp[lni, q] = np.int32((best_d << BP_SHIFT) | (g - best_src))
+
+    for q in range(ncol):
+        last[q] = sbuf[(N - 1) % K, q]
+    return last
+
+
+@numba.njit(cache=True)
+def _decode_bp(bp, N, W, seg_start, seg_end):
+    """パック済みバックポインタから状態ごとの区間を復元する（ローカル添字）。"""
+    n = N - 1
+    t = W
+    while n >= 0:
+        v   = int(bp[n, t])
+        d   = v >> BP_SHIFT
+        off = v & BP_MASK
+        src = n - off
+        if off == 0:            # 未到達セル（本来起こらない）: 無限ループ防止
+            seg_start[n] = t
+            seg_end[n]   = t
+            break
+        if d == 0:
+            # pskip ゼロフレームスキップ: src -> n
+            k = src + 1
+            while k <= n:
+                seg_start[k] = t
+                seg_end[k]   = t
+                k += 1
+            n = src
+        else:
+            start = t - d
+            seg_start[n] = start
+            seg_end[n]   = t
+            # topology スキップ: 中間状態は空区間
+            k = src + 1
+            while k < n:
+                seg_start[k] = start
+                seg_end[k]   = start
+                k += 1
+            n = src
+            t = start
+
+
+# ---------------------------------------------------------------------------
+# Hirschberg 型 分割統治バックトラック
+#
+# (N, T) のバックポインタ行列を持たずに済ませるため、状態軸の中点 m で
+# 問題を分割する。m を跨ぐ経路は必ず「状態 m-1 が時刻 t* で終わり、
+# 状態 m が時刻 t* から始まる」形になるので、
+#   前向き DP で F(t) = best(状態 m-1 が t で終わる)
+#   後向き DP で B(t) = best(状態 m が t から始まる)
+# を求め、F(t)+B(t) を最大化する t* で左右に再帰すれば全体最適が復元できる。
+# 後向き DP は「状態順と時間軸を反転した前向き DP」に等しいので、
+# `_dp_forward` をそのまま再利用する（遷移・継続時間の向きだけ反転）。
+# ---------------------------------------------------------------------------
+
+class _DPCtx:
+    """1 回の forced_align 呼び出しで共有する DP メタデータ。"""
+
+    __slots__ = ("cum_ll", "out_row", "floors", "ceils", "dur_means", "dur_vars",
+                 "t_lo", "t_hi", "use_duration", "topo_src", "topo_log",
+                 "pskip_src", "pskip_log", "K", "max_topo", "max_pskip",
+                 "valid_split")
+
+    def __init__(self, **kw):
+        for k, v in kw.items():
+            setattr(self, k, v)
+
+    def pick_split(self, n0: int, n1: int):
+        """[n0, n1) を分割する境界 m（n0 < m < n1）を中点に最も近いものから選ぶ。
+
+        スキップ辺（topology / pskip）が跨ぐ境界は選べない。
+        """
+        vs  = self.valid_split
+        mid = (n0 + n1) // 2
+        i   = int(np.searchsorted(vs, mid))
+        best = None
+        for j in (i - 1, i):
+            if 0 <= j < len(vs):
+                m = int(vs[j])
+                if n0 < m < n1 and (best is None or abs(m - mid) < abs(best - mid)):
+                    best = m
+        return best
+
+
+def _dp_forward_call(ctx, n0, n1, q0, q1, bp, store_bp):
+    """ctx を使って [n0,n1) × [q0,q1] の前向き DP を回す。"""
+    return _dp_forward(n0, n1 - n0, q1 - q0, q0,
+                       ctx.cum_ll, ctx.out_row, ctx.floors, ctx.ceils,
+                       ctx.dur_means, ctx.dur_vars, ctx.t_lo, ctx.t_hi,
+                       ctx.use_duration, ctx.topo_src, ctx.topo_log,
+                       ctx.pskip_src, ctx.pskip_log, ctx.K, bp, store_bp)
+
+
+def _prepare_reverse(ctx, m, n1, q1, W):
+    """[m, n1) × [q0, q1] を逆向きに解くための問題データを組み立てる。
+
+    戻り値の配列は逆順インデックス u = (n1-1) - n で並んでいる。
+    """
+    nst  = n1 - m
+    gidx = np.arange(n1 - 1, m - 1, -1, dtype=np.int64)
+
+    out_row = ctx.out_row[gidx].astype(np.int32)
+    floors  = ctx.floors[gidx].astype(np.int32)
+    ceils   = np.minimum(ctx.ceils[gidx], W).astype(np.int32)
+    dmeans  = ctx.dur_means[gidx].copy()
+    dvars   = ctx.dur_vars[gidx].copy()
+    # 絶対フレーム -> 反転後の局所時刻 q = q1 - t
+    t_lo = np.clip(q1 - ctx.t_hi[gidx], 0, W).astype(np.int32)
+    t_hi = np.clip(q1 - ctx.t_lo[gidx], 0, W).astype(np.int32)
+
+    # 逆向きの隣接リスト（元の辺 src -> dst は 逆問題では u_dst -> u_src）
+    deg_t = np.zeros(nst, dtype=np.int64)
+    deg_p = np.zeros(nst, dtype=np.int64)
+    for dst in range(m, n1):
+        for ki in range(ctx.max_topo):
+            s = int(ctx.topo_src[dst, ki])
+            if s < 0:
+                break
+            if s < m:
+                continue
+            deg_t[(n1 - 1) - s] += 1
+        for ki in range(ctx.max_pskip):
+            s = int(ctx.pskip_src[dst, ki])
+            if s < 0:
+                break
+            if s < m:
+                continue
+            deg_p[(n1 - 1) - s] += 1
+
+    mt = max(1, int(deg_t.max()) if nst else 1)
+    mp = max(1, int(deg_p.max()) if nst else 1)
+    topo_src  = np.full((nst, mt), -1, dtype=np.int32)
+    topo_log  = np.zeros((nst, mt), dtype=np.float64)
+    pskip_src = np.full((nst, mp), -1, dtype=np.int32)
+    pskip_log = np.zeros((nst, mp), dtype=np.float64)
+    nt  = np.zeros(nst, dtype=np.int64)
+    nps = np.zeros(nst, dtype=np.int64)
+
+    for dst in range(m, n1):
+        u = (n1 - 1) - dst
+        for ki in range(ctx.max_topo):
+            s = int(ctx.topo_src[dst, ki])
+            if s < 0:
+                break
+            if s < m:
+                continue
+            v = (n1 - 1) - s
+            topo_src[v, nt[v]] = u
+            topo_log[v, nt[v]] = ctx.topo_log[dst, ki]
+            nt[v] += 1
+        for ki in range(ctx.max_pskip):
+            s = int(ctx.pskip_src[dst, ki])
+            if s < 0:
+                break
+            if s < m:
+                continue
+            v = (n1 - 1) - s
+            pskip_src[v, nps[v]] = u
+            pskip_log[v, nps[v]] = ctx.pskip_log[dst, ki]
+            nps[v] += 1
+
+    # 逆向きの累積対数尤度: cum_r[u, q] = Σ_{τ=t1-q}^{t1-1} ll
+    used  = np.unique(out_row)
+    remap = {int(v): i for i, v in enumerate(used)}
+    orow  = np.array([remap[int(v)] for v in out_row], dtype=np.int32)
+    qs    = np.arange(W + 1, dtype=np.int64)
+    cum_r = np.empty((len(used), W + 1), dtype=np.float64)
+    for i, urow in enumerate(used):
+        cum_r[i, :] = ctx.cum_ll[int(urow), q1] - ctx.cum_ll[int(urow), q1 - qs]
+
+    return (cum_r, orow, floors, ceils, dmeans, dvars, t_lo, t_hi,
+            topo_src, topo_log, pskip_src, pskip_log)
+
+
+def _solve_block(ctx, n0, n1, q0, q1, seg_start, seg_end):
+    """分割できない（スキップ辺が跨ぐ）小区間を通常 DP で解く。
+
+    戻り値は区間終端 (n1-1, q1) のスコア。
+    """
+    nloc = n1 - n0
+    W    = q1 - q0
+    bp   = np.zeros((nloc, W + 1), dtype=np.int32)
+    row  = _dp_forward_call(ctx, n0, n1, q0, q1, bp, True)
+    ss = np.zeros(nloc, dtype=np.int64)
+    se = np.zeros(nloc, dtype=np.int64)
+    _decode_bp(bp, nloc, W, ss, se)
+    for i in range(nloc):
+        seg_start[n0 + i] = ss[i] + q0
+        seg_end[n0 + i]   = se[i] + q0
+    return float(row[W])
+
+
+def _hirschberg_backtrace(ctx, N, T):
+    """メモリ O(K·T) の分割統治バックトラック。"""
+    seg_start = np.zeros(N, dtype=np.int64)
+    seg_end   = np.zeros(N, dtype=np.int64)
+    dummy     = np.zeros((1, 1), dtype=np.int32)
+
+    # 最適スコアは通常 DP を 1 回だけ回して取得する（バックポインタは捨てる）。
+    # こうすると分割統治経路でも対数尤度が原実装とビット単位で一致する。
+    row0 = _dp_forward_call(ctx, 0, N, 0, T, dummy, False)
+    best_score = float(row0[T])
+
+    stack = [(0, N, 0, T)]
+
+    while stack:
+        n0, n1, q0, q1 = stack.pop()
+        if n1 - n0 == 1:
+            seg_start[n0] = q0
+            seg_end[n0]   = q1
+            continue
+
+        m = ctx.pick_split(n0, n1)
+        if m is None:
+            _solve_block(ctx, n0, n1, q0, q1, seg_start, seg_end)
+            continue
+
+        W = q1 - q0
+        F = _dp_forward_call(ctx, n0, m, q0, q1, dummy, False)
+        (cum_r, orow_r, fl_r, ce_r, dm_r, dv_r, tlo_r, thi_r,
+         ts_r, tl_r, ps_r, pl_r) = _prepare_reverse(ctx, m, n1, q1, W)
+        BRev = _dp_forward(0, n1 - m, W, 0, cum_r, orow_r, fl_r, ce_r,
+                           dm_r, dv_r, tlo_r, thi_r, ctx.use_duration,
+                           ts_r, tl_r, ps_r, pl_r, ctx.K, dummy, False)
+
+        NEG = -1e30
+        best_t = -1
+        best_v = NEG
+        for t in range(q0, q1 + 1):          # 同値なら t が大きい方（原実装の d 最小優先）
+            v = F[t - q0] + BRev[q1 - t]
+            if v >= best_v:
+                best_v = v
+                best_t = t
+
+        if best_t < 0 or best_v <= NEG:
+            _solve_block(ctx, n0, n1, q0, q1, seg_start, seg_end)
+            continue
+
+        # 先に右を積む（左から処理したいので LIFO 順を調整）
+        stack.append((m, n1, best_t, q1))
+        stack.append((n0, m, q0, best_t))
+
+    return seg_start, seg_end, best_score
+
+
+# ---------------------------------------------------------------------------
 # Viterbi 強制アライメント
 # ---------------------------------------------------------------------------
 
@@ -387,7 +897,8 @@ def forced_align(model: HSMMModel, streams: List[np.ndarray],
                  window: int = 60,
                  daem_temp: float = 1.0,
                  nodur_phonemes: set = None,
-                 hmm_cap: int = None) -> List[Tuple[int, int]]:
+                 hmm_cap: int = None,
+                 backtrace_mem_mb: int = 1024) -> List[Tuple[int, int]]:
     """
     HSMM Viterbi 強制アライメント。
 
@@ -406,6 +917,10 @@ def forced_align(model: HSMMModel, streams: List[np.ndarray],
     hmm_cap          : HMM モード（pass 1）での状態あたり最大フレーム数。
                        None（デフォルト）のとき制限なし。訓練の初期段階で
                        収束を助けるために小さい値（例: 200）を指定できる。
+    backtrace_mem_mb : バックポインタ行列に許すメモリ上限（MiB）。
+                       これを超える規模では Hirschberg 型の分割統治に切り替え、
+                       使用メモリを O(状態参照段数 × フレーム数) に抑える。
+                       結果はどちらの経路でも同一。
 
     Returns
     -------
@@ -490,45 +1005,62 @@ def forced_align(model: HSMMModel, streams: List[np.ndarray],
                 t_lo_arr[n] = lo
                 t_hi_arr[n] = min(T, hi)
 
-    # --- Numba JIT カーネルで DP 実行 ---
-    score, back_d, back_src = _viterbi_dp(
-        N, T, cum_ll_mat, out_row,
-        floors, ceils, dur_means, dur_vars,
-        t_lo_arr, t_hi_arr, use_duration,
-        topo_src, topo_log, pskip_src, pskip_log)
+    # --- DP メタデータ ---
+    # バックポインタの下位ビットに「何段前の状態から来たか」を詰めるため、
+    # スキップ辺の最大段数を求める。
+    max_delta = 1
+    for n, s in enumerate(state_seq):
+        for src, _ in s.topo_sources:
+            if n - src > max_delta:
+                max_delta = n - src
+        for src, _ in s.pskip_sources:
+            if n - src > max_delta:
+                max_delta = n - src
+    if max_delta > BP_MASK:
+        raise ValueError(f"skip edge spans {max_delta} states (limit {BP_MASK})")
+    K = max_delta + 1
 
-    # --- 強制アライメント: 最後の状態は必ずフレーム T で終わる ---
-    best_score = float(score[N - 1, T])
-    if best_score <= -1e30:
-        raise RuntimeError("アライメント失敗: 有効なパスが見つかりませんでした。"
-                           " 音素列と音声の長さを確認してください。")
+    # スキップ辺が跨ぐ境界は分割統治の分割点に使えない
+    blocked = np.zeros(N, dtype=bool)
+    for n, s in enumerate(state_seq):
+        for src, _ in s.topo_sources:
+            blocked[src + 1:n + 1] = True
+        for src, _ in s.pskip_sources:
+            blocked[src + 1:n + 1] = True
+    valid_split = np.nonzero(~blocked)[0].astype(np.int64)
+    valid_split = valid_split[(valid_split >= 1) & (valid_split <= N - 1)]
 
-    # --- バックトラック ---
-    # back_d[n,t]=0 かつ back_src[n,t]!=n-1: pskip ゼロフレーム
-    # back_d[n,t]>0 かつ back_src[n,t]!=n-1: topology スキップ（中間状態をゼロ埋め）
-    # back_d[n,t]>0 かつ back_src[n,t]==n-1: 通常遷移
-    segments: List[Tuple[int, int]] = [None] * N  # type: ignore[list-item]
-    t = T
-    n = N - 1
-    while n >= 0:
-        d   = int(back_d[n, t])
-        src = int(back_src[n, t])
+    ctx = _DPCtx(cum_ll=cum_ll_mat, out_row=out_row,
+                 floors=floors, ceils=ceils,
+                 dur_means=dur_means, dur_vars=dur_vars,
+                 t_lo=t_lo_arr, t_hi=t_hi_arr,
+                 use_duration=use_duration,
+                 topo_src=topo_src, topo_log=topo_log,
+                 pskip_src=pskip_src, pskip_log=pskip_log,
+                 K=K, max_topo=max_topo, max_pskip=max_pskip,
+                 valid_split=valid_split)
 
-        if d == 0:
-            # pskip ゼロフレームスキップ: src → n（フレーム消費なし）
-            # src+1..n の全状態に空区間を割り当て
-            for k in range(src + 1, n + 1):
-                segments[k] = (t, t)
-            n = src
-        else:
-            start = t - d
-            segments[n] = (start, t)
-            # topology スキップ: src が n-1 でなければ中間状態を空区間に
-            for k in range(src + 1, n):
-                segments[k] = (start, start)
-            n   = src
-            t   = start
+    # --- DP 実行 ---
+    # バックポインタ行列（int32 1 枚）が閾値に収まるなら通常 DP、
+    # 超えるなら Hirschberg 型の分割統治でメモリ O(K·T) にする。
+    est_bytes = 4 * N * (T + 1)
+    if est_bytes <= backtrace_mem_mb * 1024 * 1024:
+        bp = np.zeros((N, T + 1), dtype=np.int32)
+        row = _dp_forward_call(ctx, 0, N, 0, T, bp, True)
+        best_score = float(row[T])
+        if best_score <= -1e30:
+            raise RuntimeError("alignment failed: no valid path found. "
+                               "Check that the phoneme sequence length fits the audio.")
+        ss = np.zeros(N, dtype=np.int64)
+        se = np.zeros(N, dtype=np.int64)
+        _decode_bp(bp, N, T, ss, se)
+    else:
+        ss, se, best_score = _hirschberg_backtrace(ctx, N, T)
+        if best_score is None or best_score <= -1e30:
+            raise RuntimeError("alignment failed: no valid path found. "
+                               "Check that the phoneme sequence length fits the audio.")
 
+    segments: List[Tuple[int, int]] = [(int(ss[i]), int(se[i])) for i in range(N)]
     return segments, best_score
 
 
@@ -537,7 +1069,8 @@ def forced_align_2pass(model: HSMMModel, streams: List[np.ndarray],
                        window: int = 60,
                        daem_temp: float = 1.0,
                        nodur_phonemes: set = None,
-                       hmm_cap: int = None) -> List[Tuple[int, int]]:
+                       hmm_cap: int = None,
+                       backtrace_mem_mb: int = 1024) -> List[Tuple[int, int]]:
     """
     2パス強制アライメント（SHIRO 方式）。
 
@@ -553,11 +1086,11 @@ def forced_align_2pass(model: HSMMModel, streams: List[np.ndarray],
     """
     initial, _ = forced_align(model, streams, state_seq, use_duration=False,
                               daem_temp=daem_temp, nodur_phonemes=nodur_phonemes,
-                              hmm_cap=hmm_cap)
+                              hmm_cap=hmm_cap, backtrace_mem_mb=backtrace_mem_mb)
     refined, loglik = forced_align(model, streams, state_seq, use_duration=True,
                                    initial_segments=initial, window=window,
                                    daem_temp=daem_temp, nodur_phonemes=nodur_phonemes,
-                                   hmm_cap=hmm_cap)
+                                   hmm_cap=hmm_cap, backtrace_mem_mb=backtrace_mem_mb)
     return refined, loglik
 
 
@@ -916,7 +1449,7 @@ def realign_external_labels(
 
 
 # ---------------------------------------------------------------------------
-# CLI エントリポイント
+# CLI entry point
 # ---------------------------------------------------------------------------
 
 def main():
@@ -926,41 +1459,50 @@ def main():
     from pyshiro.phonemes import convert_lyric_file
     from pyshiro.labels   import segments_to_phoneme_intervals, write_lab
 
-    parser = argparse.ArgumentParser(description="SHIRO HSMM 強制アライメント")
-    parser.add_argument("wav",        type=Path, help="入力 WAV ファイル")
-    parser.add_argument("lyrics",     type=Path, help="歌詞 .txt ファイル")
-    parser.add_argument("--model",    type=Path, required=True,
-                        help=".hsmm モデルファイル")
-    parser.add_argument("--phonemap", type=Path, required=True,
-                        help="phonemap.json ファイル")
+    parser = argparse.ArgumentParser(
+        description="HSMM forced alignment for Japanese singing voice (pyshiro-fast)")
+    parser.add_argument("wav",        type=Path,
+                        help="input WAV file (16 kHz mono; no resampling is performed)")
+    parser.add_argument("lyrics",     type=Path,
+                        help="lyrics .txt file (hiragana, one phrase per line)")
+    parser.add_argument("--model",    type=Path, default=None,
+                        help="path to a .hsmm model (default: bundled jp-v2)")
+    parser.add_argument("--phonemap", type=Path, default=None,
+                        help="path to a phonemap .json (default: bundled jp-v2)")
     parser.add_argument("--out",      type=Path, default=None,
-                        help="出力 .lab ファイル（省略時は WAV と同名）")
+                        help="output path (defaults to the WAV name)")
     parser.add_argument("--format",   choices=["lab", "textgrid", "audacity"],
-                        default="lab", help="出力形式（デフォルト: lab）")
+                        default="lab", help="output format (default: lab)")
     args = parser.parse_args()
+
+    if args.model is None or args.phonemap is None:
+        from pyshiro.bundled import bundled_model_path
+        default_model, default_phonemap = bundled_model_path("jp-v2")
+        args.model    = args.model    or default_model
+        args.phonemap = args.phonemap or default_phonemap
 
     out_path = args.out or args.wav.with_suffix(
         ".lab" if args.format == "lab" else
         ".TextGrid" if args.format == "textgrid" else ".txt"
     )
 
-    print(f"モデル読み込み: {args.model}", flush=True)
+    print(f"Loading model: {args.model}", flush=True)
     model    = load_hsmm(args.model)
     phonemap = load_phonemap(args.phonemap)
 
-    print(f"特徴抽出: {args.wav}", flush=True)
+    print(f"Extracting features: {args.wav}", flush=True)
     streams  = extract_mfcc_from_file(args.wav)
     T        = streams[0].shape[0]
 
-    print(f"音素変換: {args.lyrics}", flush=True)
+    print(f"Converting lyrics: {args.lyrics}", flush=True)
     phonemes = convert_lyric_file(args.lyrics)
-    print(f"  音素列 ({len(phonemes)}): {' '.join(phonemes)}", flush=True)
+    print(f"  phonemes ({len(phonemes)}): {' '.join(phonemes)}", flush=True)
 
-    print(f"アライメント中... (T={T}, N={len(phonemes)})", flush=True)
+    print(f"Aligning... (T={T} frames, {len(phonemes)} phonemes)", flush=True)
     state_seq = build_state_sequence(phonemes, phonemap, T)
     segments, loglik = forced_align_2pass(model, streams, state_seq,
                                           nodur_phonemes={"pau", "br"})
-    print(f"  対数尤度: {loglik / T:.4f} nats/frame", flush=True)
+    print(f"  log-likelihood: {loglik / T:.4f} nats/frame", flush=True)
 
     intervals = segments_to_phoneme_intervals(phonemes, segments)
 
@@ -973,49 +1515,8 @@ def main():
         from pyshiro.labels import write_audacity
         write_audacity(intervals, out_path)
 
-    print(f"保存: {out_path}", flush=True)
+    print(f"Wrote: {out_path}", flush=True)
 
-
-# ---------------------------------------------------------------------------
-# スタンドアロン実行（動作確認用）
-# ---------------------------------------------------------------------------
 
 if __name__ == '__main__':
-    import sys
-    from pyshiro.features import extract_mfcc_from_file, HOP_TIME as HT
-    from pyshiro.model    import load_hsmm
-    from pyshiro.phonemes import load_table, convert_lyric_file
-
-    if len(sys.argv) < 3:
-        print('Usage: python shiro/align.py <wav> <lyric.txt>')
-        sys.exit(1)
-
-    wav_path = Path(sys.argv[1])
-    txt_path = Path(sys.argv[2])
-
-    print('モデル読み込み...')
-    model    = load_hsmm('SHIRO-Models-Japanese/intunist-jp6_generic.hsmm')
-    phonemap = load_phonemap('SHIRO-Models-Japanese/intunist-jp6_phonemap.json')
-    table    = load_table(Path('data/kana2phonemes.table'))
-
-    print('特徴抽出...')
-    streams  = extract_mfcc_from_file(wav_path)
-    T        = streams[0].shape[0]
-
-    print('音素変換...')
-    phonemes = convert_lyric_file(txt_path, table)
-    print(f'  音素列 ({len(phonemes)}): {" ".join(phonemes)}')
-
-    print(f'アライメント中... (T={T}, N_states={len(phonemes)*3})')
-    state_seq = build_state_sequence(phonemes, phonemap, T)
-    segments, loglik = forced_align(model, streams, state_seq)
-    print(f'  対数尤度: {loglik / T:.4f} nats/frame')
-
-    # 音素単位で集約（3状態 → 1音素）
-    print('\n--- 結果 ---')
-    for i, ph in enumerate(phonemes):
-        s0, _  = segments[i * 3]
-        _, e2  = segments[i * 3 + 2]
-        t0 = s0 * HT
-        t1 = e2 * HT
-        print(f'  {t0:.3f} - {t1:.3f}  {ph}')
+    main()

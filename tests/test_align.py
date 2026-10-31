@@ -1,6 +1,8 @@
 """
-基本的な動作確認テスト。
-モデルファイル (.hsmm, phonemap.json) へのパスは環境変数または引数で渡す。
+Basic behaviour tests.
+
+The model path can be overridden with PYSHIRO_MODEL / PYSHIRO_PHONEMAP;
+by default the bundled jp-v2 model is used.
 """
 
 import os
@@ -11,8 +13,14 @@ from pathlib import Path
 import pyshiro
 
 
-HSMM_PATH     = os.environ.get("PYSHIRO_MODEL",    "")
-PHONEMAP_PATH = os.environ.get("PYSHIRO_PHONEMAP", "")
+_env_model    = os.environ.get("PYSHIRO_MODEL", "")
+_env_phonemap = os.environ.get("PYSHIRO_PHONEMAP", "")
+
+if _env_model and _env_phonemap:
+    HSMM_PATH, PHONEMAP_PATH = Path(_env_model), Path(_env_phonemap)
+else:
+    from pyshiro.bundled import bundled_model_path
+    HSMM_PATH, PHONEMAP_PATH = bundled_model_path("jp-v2")
 
 
 def test_mfcc_shape():
@@ -32,11 +40,11 @@ def test_phonemes_conversion():
     assert "pau" in phonemes
 
 
-@pytest.mark.skipif(not HSMM_PATH or not PHONEMAP_PATH,
-                    reason="PYSHIRO_MODEL / PYSHIRO_PHONEMAP not set")
+@pytest.mark.skipif(not HSMM_PATH.is_file() or not PHONEMAP_PATH.is_file(),
+                    reason="model files not available")
 def test_forced_align():
-    model    = pyshiro.load_hsmm(Path(HSMM_PATH))
-    phonemap = pyshiro.load_phonemap(Path(PHONEMAP_PATH))
+    model    = pyshiro.load_hsmm(HSMM_PATH)
+    phonemap = pyshiro.load_phonemap(PHONEMAP_PATH)
     table    = pyshiro.load_table()
 
     audio    = np.zeros(16000, dtype=np.float32)
@@ -45,6 +53,6 @@ def test_forced_align():
 
     phonemes  = pyshiro.text_to_phonemes("きっと", table)
     state_seq = pyshiro.build_state_sequence(phonemes, phonemap, T)
-    segments  = pyshiro.forced_align(model, streams, state_seq,
-                                     use_duration=False)
+    segments, _ = pyshiro.forced_align(model, streams, state_seq,
+                                       use_duration=False)
     assert len(segments) == len(state_seq)

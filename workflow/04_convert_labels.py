@@ -16,13 +16,13 @@ pyshiro で訓練したモデルは閉鎖期も子音ラベルに含める。
 
 使い方:
   python workflow/05_convert_labels.py audio.wav external.lab \\
-      --model    checkpoint/pyshiro-jp-v1.hsmm \\
-      --phonemap checkpoint/pyshiro-jp-v1_phonemap.json \\
+      --model    pyshiro/data/models/pyshiro-jp-v1.hsmm \\
+      --phonemap pyshiro/data/models/pyshiro-jp-v1_phonemap.json \\
       --out      converted.lab
 
   python workflow/05_convert_labels.py audio.wav external.TextGrid \\
-      --model    checkpoint/pyshiro-jp-v1.hsmm \\
-      --phonemap checkpoint/pyshiro-jp-v1_phonemap.json \\
+      --model    pyshiro/data/models/pyshiro-jp-v1.hsmm \\
+      --phonemap pyshiro/data/models/pyshiro-jp-v1_phonemap.json \\
       --format   textgrid \\
       --out      converted.TextGrid \\
       --phoneme_map phoneme_map.json
