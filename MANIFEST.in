@@ -1,0 +1,15 @@
+include LICENSE
+include NOTICE
+include README.md
+include CHANGELOG.md
+include CITATION.cff
+include pyproject.toml
+include MANIFEST.in
+
+recursive-include pyshiro/data *.table *.hsmm *.json
+recursive-include tests *.py
+recursive-include bench *.py
+recursive-include docs *.md *.html *.css
+recursive-include examples *.py *.md
+
+global-exclude *.py[cod] __pycache__/* *.nbc *.nbi .DS_Store

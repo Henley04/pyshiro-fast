@@ -1,35 +1,41 @@
+# Python
 __pycache__/
 *.py[cod]
 *.pyo
-.DS_Store
+.pytest_cache/
+.venv/
+venv/
+
+# Build artefacts
 dist/
 build/
 *.egg-info/
 .eggs/
-.venv/
-venv/
+
+# Models are ignored by default, then whitelisted where we ship them
 *.hsmm
+!pyshiro/data/models/*.hsmm
+!checkpoint/*.hsmm
 !models/**/*.hsmm
 !ckpt/pyshiro-jp.hsmm
-!checkpoint/*.hsmm
-*.npz
 ckpt/
-!ckpt/pyshiro-jp.hsmm
+
+# Local scratch
+*.npz
 debug/
 /data/
-HANDOFF.md
 test_plots/
+HANDOFF.md
+.DS_Store
 
-# example フォルダ内の WAV（コーパス再配布防止）
+# Audio inside example/ is never redistributed
 example/raw_wav/*.wav
 example/wav_16k/*.wav
 example/cut_wav/*.wav
 
-# example 内の作業用フォルダ（念の為残すがコミットしない）
+# Working folders inside example/
 example/kiritan_01/
 example/convert_labels_old/
 example/convert_labels/wav/*.wav
-
-# TextGrid 版（手修正確認用・コミット不要）
 example/convert_labels/fixed_textgrid_default/
 example/convert_labels/fixed_textgrid_recommended/

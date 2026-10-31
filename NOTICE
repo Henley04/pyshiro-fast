@@ -1,0 +1,51 @@
+pyshiro-fast
+============
+
+Copyright (C) 2026 henley04 and pyshiro-fast contributors
+Copyright (C) 2025 wavtechyukky and pyshiro contributors
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE.  See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with
+this program.  If not, see <https://www.gnu.org/licenses/>.
+
+The full license text is in LICENSE.
+
+
+Upstream projects
+-----------------
+
+pyshiro-fast is a fork of pyshiro, a Python reimplementation of SHIRO.
+
+  pyshiro  — https://github.com/wavtechyukky/pyshiro        (GPL-3.0)
+  SHIRO    — https://github.com/Sleepwalking/SHIRO           (original C++ toolkit)
+
+The public API, file formats (.hsmm, phonemap.json, .lab, TextGrid) and the
+kana-to-phoneme table are derived from those projects. The kana-to-phoneme
+table is based on the conversion table shipped with ENUNU.
+
+The alignment engine in pyshiro-fast (pyshiro/align.py) was rewritten for
+speed. It produces the same alignment as the upstream implementation, which is
+kept in the same file as a reference implementation
+(``_viterbi_dp``) for regression testing.
+
+
+Bundled models
+--------------
+
+Two models trained by wavtechyukky are redistributed unmodified:
+
+  pyshiro/data/models/pyshiro-jp-v1.hsmm  (19.4 h, multi-database, ``br`` support)
+  pyshiro/data/models/pyshiro-jp-v2.hsmm  (trained with ``--nmix 4``)
+
+They come from the upstream pyshiro repository and are redistributed under the
+same GPL-3.0 terms. The singing-voice databases used to train the v1 model are
+credited in docs/models.md. If you intend to use these models commercially,
+check the terms of the source databases first.
