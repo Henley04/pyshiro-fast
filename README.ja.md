@@ -49,6 +49,9 @@ pip install -e .
 
 > `--recurse-submodules` を付けると `models/` 以下の訓練済みモデルも同時に取得できます。
 
+> **pyshiro-fast では**：モデルは `pyshiro/data/models/` に同梱され、`pip install` だけで使えます。
+> 上流の `models/` サブモジュールは不要になったため削除しました。
+
 ## クイックスタート
 
 ```python

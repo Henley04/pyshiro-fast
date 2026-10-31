@@ -66,7 +66,7 @@ pyshiro-train --wav_dir DIR --lab_dir DIR [options]
 |---|---|---|
 | `--wav_dir` | required | directory of 16 kHz mono WAVs |
 | `--lab_dir` | required | directory of initial `.lab` files (same stems) |
-| `--phonemap` | `SHIRO-Models-Japanese/intunist-jp6_phonemap.json` | phoneme set definition |
+| `--phonemap` | bundled `jp-v2` phonemap | phoneme set definition |
 | `--out` | `my_model.hsmm` | output model |
 | `--iters` | `5` | total EM iterations |
 | `--hmm_iters` | `0` | duration-free bootstrap iterations (like `shiro-rest -g`) |

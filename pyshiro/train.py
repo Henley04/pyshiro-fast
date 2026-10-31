@@ -898,8 +898,8 @@ def main():
                         help="directory of WAV files")
     parser.add_argument("--lab_dir",   type=Path, required=True,
                         help="directory of initial .lab files")
-    parser.add_argument("--phonemap",  type=Path,
-                        default=Path("SHIRO-Models-Japanese/intunist-jp6_phonemap.json"))
+    parser.add_argument("--phonemap",  type=Path, default=None,
+                        help="phoneme set definition (default: the bundled jp-v2 phonemap)")
     parser.add_argument("--out",       type=Path, default=Path("my_model.hsmm"),
                         help="output .hsmm path")
     parser.add_argument("--iters",     type=int, default=5,
@@ -923,6 +923,10 @@ def main():
     parser.add_argument("--test_lab_dir", type=Path, default=None,
                         help="held-out LAB directory (with --test_wav_dir)")
     args = parser.parse_args()
+
+    if args.phonemap is None:
+        from pyshiro.bundled import bundled_model_path
+        args.phonemap = bundled_model_path("jp-v2")[1]
 
     train(
         wav_dir=args.wav_dir,
